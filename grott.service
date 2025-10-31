@@ -8,10 +8,10 @@ After=network.target
 [Service]
 SyslogIdentifier=grott
 Type=simple
-User=pi
+User=henry
 
-WorkingDirectory=/home/pi/grott/
-ExecStart=-/usr/bin/python3 -u /home/pi/grott/grott.py -v
+WorkingDirectory=/home/henry/grott/
+ExecStart=-/home/henry/venvs/grott/bin/python -u /home/henry/grott/grott.py -v
 #StandardInput=socket
 StandardOutput=journal
 

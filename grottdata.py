@@ -76,25 +76,10 @@ class MQTTPublisher:
             finally:
                 client.disconnect()
                 logger.debug("MQTT client disconnected")
-
-        try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(publish_message)
-                future.result(timeout=timeout)
-            logger.debug("MQTT message published successfully to topic: %s", topic)
-            return True
-        except TimeoutError:
-            logger.debug("Timeout occurred while publishing to topic: %s", topic)
-            return False
-        except ConnectionRefusedError:
-            logger.debug("Connection refused by MQTT broker for topic: %s", topic)
-            return False
-        except socket.timeout:
-            logger.debug("Socket timeout while publishing to topic: %s", topic)
-            return False
-        except Exception as e:
-            logger.debug("Exception in MQTT publish: %s", e)
-            return False
+        
+        publish_message()
+        return True
+    
 
     def __del__(self):
         """
@@ -168,7 +153,7 @@ def str2bool(defstr):
 
 
 
-def AutoCreateLayout(conf,data,protocol,deviceno,recordtype) :
+def AutoCreateLayout(conf,recInfo) :
     """ Auto generate layout definitions from data record """
     # At this moment 3 types of layout description are known:
     # -"Clasic" inverters (eg. 1500-S) for Grott
@@ -176,24 +161,20 @@ def AutoCreateLayout(conf,data,protocol,deviceno,recordtype) :
     # -"SPF" Inverters, not yet covered in the AutoCreateLayout, while detection interferes with Classic type detection.
     #
     logger.debug("automatic determine data layout started")
-    datalen = len(data)
-
-    # decrypt data if needed
-    if protocol in ("05","06") :
-        result_string = decrypt(data)
-    else : result_string = data.hex()
-
-    # do not process ack records.
-    if datalen < conf.mindatarec :
-        layout = "none"
-        return(layout,result_string)
-
     #create standard layout
-    layout = "T" + protocol + deviceno + recordtype
-    #v270 add X for extended except for smart monitor records
-    if ((datalen > 375) and recordtype not in conf.smartmeterrec ) :  layout = layout + "X"
+    layout = recInfo.inverterid
+    logger.debug(f"Check if layout for inverter id: {layout} exists")
+    if layout in conf.recorddict :
+        return layout
 
-    if recordtype  in conf.datarec:
+    logger.debug(f"Layout {layout }does not exist and will be created")
+
+
+    layout = "T" + recInfo.protocol + recInfo.deviceid + recInfo.rectype
+    #v270 add X for extended except for smart monitor records
+    if ((len(recInfo.origData) > 375) and recInfo.rectype not in conf.smartmeterrec ) :  layout = layout + "X"
+
+    if recInfo.rectype  in conf.datarec:
         #for data records create or select layout definition
 
         inverter_type = conf.invtype.upper()
@@ -204,7 +185,7 @@ def AutoCreateLayout(conf,data,protocol,deviceno,recordtype) :
                 logger.debug("invtypemap defined: %s",conf.invtypemap)
                 #process invetermap defined:
                 serialloc = 36
-                if protocol == "06" :
+                if recInfo.protocol == "06" :
                     serialloc = 76
                 try:
                     inverter_serial = codecs.decode(result_string[serialloc:serialloc+20], "hex").decode('ASCII')
@@ -219,23 +200,11 @@ def AutoCreateLayout(conf,data,protocol,deviceno,recordtype) :
 
         if inverter_type == "AUTO" :
             registergrp = {}
-            #layout = "AUTOGEN"
-            if protocol in ("00","02") : initlayout = "ALO02"
-            else : initlayout = "ALO" + protocol
+            if recInfo.protocol in ("00","02") : initlayout = "ALO02"
+            else : initlayout = "ALO" + recInfo.protocol
             logger.debug("Base Layout selected %s: ",initlayout)
-            layout = codecs.decode(result_string[conf.alodict[initlayout]["pvserial"]["value"]:conf.alodict[initlayout]["pvserial"]["value"]+20], "hex").decode('utf-8')
 
-            try:
-               print(layout)
-               print(conf.recorddict[layout]["pvserial"]["value"])
-               test = conf.recorddict[layout]["pvserial"]["value"]
-               logger.debug("layout already exist and will be reused: %s",layout)
-               return(layout,result_string)
-
-            except Exception as e:
-               print(e)
-               logger.debug("layout does not excist and will be created: %s", layout)
-               conf.recorddict[layout] = {}
+            conf.recorddict[layout] = {}
 
             logger.debug("layout record used:")
             for keyword in conf.alodict[initlayout] :
@@ -258,7 +227,7 @@ def AutoCreateLayout(conf,data,protocol,deviceno,recordtype) :
                 grouploc = grouploc + 8 + (int(groupend,16) - int (groupstart,16) +1)*4
                 logger.debug("Detected registergroup {0}, values: {1}".format(group,registergrp[group]))
                 #is this end of record?
-                if grouploc >= len(data)*2-4:
+                if grouploc >= len(recInfo.origData)*2-4:
                    break
 
             #create layout record from register groups:
@@ -299,18 +268,19 @@ def AutoCreateLayout(conf,data,protocol,deviceno,recordtype) :
                     logger.debug("\t {0}: \t".format(keyword)+addtab+"{0}".format(conf.recorddict[layout][keyword]))
 
 
-        if inverter_type.upper() not in ("DEFAULT", "AUTO") and recordtype not in conf.smartmeterrec :
+        if inverter_type.upper() not in ("DEFAULT", "AUTO") and recInfo.rectype not in conf.smartmeterrec :
                         layout = layout + inverter_type.upper()
 
         logger.debug("Auto Layout determined : %s", layout)
     try:
         # does record layout record exists?
         test = conf.recorddict[layout]
+        conf.saveRecordJson(layout)
     except:
         #try generic if generic record exist
         logger.debug("no matching specific record layout found, try generic")
-        if recordtype in conf.datarec:
-            layout = layout.replace(deviceno+recordtype, "NNNN")
+        if recInfo.rectype in conf.datarec:
+            layout = layout.replace(recInfo.deviceid+recInfo.rectype, "NNNN")
             try:
                 # does generic record layout exists?
                 test = conf.recorddict[layout]
@@ -319,9 +289,9 @@ def AutoCreateLayout(conf,data,protocol,deviceno,recordtype) :
                 logger.debug("no matching generic inverter record layout found")
                 layout = "none"
         #test smartmeter layout
-        if recordtype in conf.smartmeterrec:
+        if recInfo.rectype in conf.smartmeterrec:
             print(layout)
-            layout = layout.replace(deviceno, "NN")
+            layout = layout.replace(recInfo.deviceid, "NN")
             print(layout)
 
             try:
@@ -332,43 +302,39 @@ def AutoCreateLayout(conf,data,protocol,deviceno,recordtype) :
                 logger.debug("no matching generic smart meter record layout found")
                 layout = "none"
 
-    return(layout,result_string)
+    return layout
 
 
 
 
-def procdata(conf,data):
-    #(re)set loglevel
-    logger.setLevel(conf.loglevel.upper())
-    logger.info ("Data processing started")
+def procdata(conf,recInfo):
+    logger.debug ("Data processing started")
 
-    header = "".join("{:02x}".format(n) for n in data[0:8])
     buffered = "nodetect"                                               # set buffer detection to nodetect (for compat mode), wil in auto detection changed to no or yes
-    protocol = header[6:8]                                              # SET PROTOCOL TYPE(00, 02, 5, 06)
-    deviceno = header[12:14]                                            #set devicenumber (for shinewifi ,lan always: 01 for shinelink 5x)
-    recordtype =  header[14:16]                                         # SET RECORD TYPE (04, 50 are inverter data records, 20,1b smart meter)
-
-    if recordtype == "50" : buffered = "yes"                            # record type 50 is a historical (buffered) record type
-    else: buffered = "no"
+    if recInfo.rectype == "50" : 
+        buffered = "yes"                            # record type 50 is a historical (buffered) record type
+    else: 
+        buffered = "no"
 
     #if not conf.compat :
     #Create layout
-    layout,result_string = AutoCreateLayout(conf,data,protocol,deviceno,recordtype)
+    layout = AutoCreateLayout(conf,recInfo)
 
     if layout == "none" :
         logger.warning("No matching layout found data record will not be processed")
         novalidrec = True
 
-    else : logger.info("Record layout used : %s", layout)
+    else : logger.debug("Record layout used : %s", layout)
     #save layout in conf to being passed to extension
     conf.layout = layout
-
+    result_string = recInfo.decryptedData
+ 
     #print data records (original/decrypted)
-    logger.debug("Original data:\n{0} \n".format(format_multi_line("\t",data,80)))
+    logger.debug("Original data:\n{0} \n".format(format_multi_line("\t",recInfo.origData,80)))
     logger.debug("Decrypted data:\n{0} \n".format(format_multi_line("\t",result_string,80)))
 
     # Test length if < 12 it is a data ack record or no layout record is defined
-    if recordtype not in conf.datarec+conf.smartmeterrec or conf.layout == "none":
+    if recInfo.rectype not in conf.datarec+conf.smartmeterrec or conf.layout == "none":
         logger.debug("Grott data ack record or data record not defined, no processing done")
         return
 
@@ -377,21 +343,12 @@ def procdata(conf,data):
 
     # define dictonary for key values.
     definedkey = {}
-
-    #if conf.compat is False:
-    # dataprocessing with defined record layout
-
-    if conf.verbose:
-        print("\t - " + 'Growatt new layout processing')
-        #print("\t\t - " + "decrypt       : ",conf.decrypt)
-        #print("\t\t - " + "offset        : ", conf.offset)
-        print("\t\t - " + "record layout : ", layout)
-        print()
-
+    logger.debug(f'Growatt new layout processing, record layout used: {layout}')
     try:
         #v270 try if logstart and log fields are defined, if yes prepare log fields
         logstart = conf.recorddict[layout]["logstart"]["value"]
         logdict = {}
+
         logdict = bytes.fromhex(result_string[conf.recorddict[layout]["logstart"]["value"]:len(result_string)-4]).decode("ASCII").split(",")
     except:
         pass
@@ -401,36 +358,33 @@ def procdata(conf,data):
     for keyword in  conf.recorddict[layout].keys() :
 
         if keyword not in ("decrypt","date","logstart","device") :
-            #try if keyword should be included
-            include=True
+            if keyword in conf.recorddict[layout] and "incl" in conf.recorddict[layout][keyword]  and conf.recorddict[layout][keyword]["incl"] == "no" :
+                include=False
+            else:
+                include=True
             try:
-                #try if key type is specified
-                if conf.recorddict[layout][keyword]["incl"] == "no" :
-                    include=False
-            except:
-                #no include statement keyword should be process, set include to prevent except errors
-                include = True
             #process only keyword needs to be included (default):
-            try:
                 if ((include) or (conf.includeall)):
-                    try:
+                    if "type" in conf.recorddict[layout][keyword] :
                         #try if key type is specified
                         keytype = conf.recorddict[layout][keyword]["type"]
-                    except:
-                        #if not default is num
-                        keytype = "num"
-                    if keytype == "text" :
-                        definedkey[keyword] = result_string[conf.recorddict[layout][keyword]["value"]:conf.recorddict[layout][keyword]["value"]+(conf.recorddict[layout][keyword]["length"]*2)]
-                        definedkey[keyword] = codecs.decode(definedkey[keyword], "hex").decode('utf-8')
-                        #print(definedkey[keyword])
-                    if keytype == "num" :
-                    #else:
-                        definedkey[keyword] = int(result_string[conf.recorddict[layout][keyword]["value"]:conf.recorddict[layout][keyword]["value"]+(conf.recorddict[layout][keyword]["length"]*2)],16)
-                    if keytype == "numx" :
-                        #process signed integer
-                        keybytes = bytes.fromhex(result_string[conf.recorddict[layout][keyword]["value"]:conf.recorddict[layout][keyword]["value"]+(conf.recorddict[layout][keyword]["length"]*2)])
-                        definedkey[keyword] = int.from_bytes(keybytes, byteorder='big', signed=True)
-                    if keytype == "log" :
+                    else:
+                        keytype = "num"  #if not default is num
+                    if keytype in ("text","num","numx") :
+                        if "value" not in conf.recorddict[layout][keyword] or "length" not in conf.recorddict[layout][keyword] :    
+                            logger.warning(f"Error in keyword processing :  {keyword} value or length not present,keyword skipped")
+                            continue
+                        rawValue = result_string[conf.recorddict[layout][keyword]["value"]:conf.recorddict[layout][keyword]["value"]+(conf.recorddict[layout][keyword]["length"]*2)]
+                        if keytype == "text" :
+                            definedkey[keyword] = codecs.decode(rawValue, "hex").decode('utf-8')
+                            #print(definedkey[keyword])
+                        elif keytype == "num" :
+                            definedkey[keyword] = int(rawValue,16)
+                        elif keytype == "numx" :
+                            #process signed integer
+                            keybytes = bytes.fromhex(rawValue)
+                            definedkey[keyword] = int.from_bytes(keybytes, byteorder='big', signed=True)
+                    elif keytype == "log" :
                         # Proces log fields
                         definedkey[keyword] = logdict[conf.recorddict[layout][keyword]["pos"]-1]
                     if keytype == "logpos" :
@@ -446,7 +400,7 @@ def procdata(conf,data):
                             definedkey[keyword] = logdict[conf.recorddict[layout][keyword]["pos"]-1]
                         else : definedkey[keyword] = 0
             except:
-                if conf.verbose : print("\t - grottdata - error in keyword processing : ", keyword + " ,data processing stopped")
+                logger.warning(f"Error in keyword processing : {keyword} skipped")
                 #return(8)
 
     # test if pvserial was defined, if not take inverterid from config.
@@ -459,7 +413,7 @@ def procdata(conf,data):
         try:
             test = definedkey["pvserial"]
         except:
-            definedkey["pvserial"] = conf.inverterid
+            definedkey["pvserial"] = recInfo.inverterid
             conf.recorddict[layout]["pvserial"] = {"value" : 0, "type" : "text"}
             if conf.verbose : print("\t - pvserial not found and device not specified used configuration defined invertid:", definedkey["pvserial"] )
 
@@ -565,9 +519,9 @@ def procdata(conf,data):
         #create JSON message  (first create obj dict and then convert to a JSON message)
 
         # filter invalid 0120 record (0 < voltage_l1 > 500 )
-        if header[14:16] == "20" :
+        if recInfo.rectype == "20" :
             if (definedkey["voltage_l1"]/10 > 500) or (definedkey["voltage_l1"]/10 < 0) :
-                print("\t - " + "Grott invalid 0120 record processing stopped")
+                logger.error("Grott invalid 0120 record processing stopped")
                 return
 
         #v270
@@ -578,7 +532,7 @@ def procdata(conf,data):
             deviceid = definedkey["device"]
 
         else :
-            if header[14:16] not in conf.smartmeterrec :
+            if recInfo.rectype not in conf.smartmeterrec :
                 deviceid = definedkey["pvserial"]
             else :
                 deviceid = definedkey["datalogserial"]
@@ -615,17 +569,17 @@ def procdata(conf,data):
 
         if conf.nomqtt != True:
             #if meter data use mqtttopicname topic
-            if (header[14:16] in ("20","1b")) and (conf.mqttmtopic == True) :
+            if (recInfo.rectype in ("20","1b")) and (conf.mqttmtopic == True) :
                 mqtttopic = conf.mqttmtopicname
             else :
                 #test if invertid needs to be added to topic
                 if conf.mqttinverterintopic :
                     mqtttopic = conf.mqtttopic + "/" + deviceid
                 else: mqtttopic = conf.mqtttopic
-            print("\t - " + 'Grott MQTT topic used : ' + mqtttopic)
+            logger.debug('Grott MQTT topic used : ' + mqtttopic) 
 
             if conf.mqttretain:
-               if conf.verbose: print("\t - " + 'Grott MQTT message retain enabled')
+               logger.debug('Grott MQTT message retain enabled')
 
             try:
                logger.debug("MQTT messaging initialization started")
@@ -661,7 +615,7 @@ def procdata(conf,data):
             except Exception as e:
                print("\t - " + "Grott MQTT publish error ", str(e))
         else:
-            if conf.verbose: print("\t - " + 'No MQTT message sent, MQTT disabled')
+            logger.debug('No MQTT message sent, MQTT disabled')
 
         # process pvoutput if enabled
         if conf.pvoutput :
@@ -695,7 +649,7 @@ def procdata(conf,data):
             pvotime = jsondate[11:16]
             # debug: pvotime = "09:05"
             # if record is a smart monitor record sent smart monitor data to PVOutput
-            if header[14:16] != "20" :
+            if recInfo.rectype != "20" :
                 pvdata = {
                     "d"     : pvodate,
                     "t"     : pvotime,
@@ -782,7 +736,7 @@ def procdata(conf,data):
         # prepare influx jsonmsg dictionary
 
         # if record is a smart monitor record use datalogserial as measurement (to distinguish from solar record)
-        if header[14:16] != "20" :
+        if recInfo.rectype != "20" :
             ifobj = {
                         "measurement" : definedkey["pvserial"],
                         "time" : ifdt,

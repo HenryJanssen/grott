@@ -13,7 +13,8 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs, parse_qsl
 from collections import defaultdict
 import logging
-import os,psutil
+import os, psutil
+from grottconf import Conf
 from grottdata import procdata
 
 #set logging definities
@@ -25,7 +26,6 @@ logger = logging.getLogger(__name__)
 # Version:
 vrmserver = "3.2.1_20250608"
 
-loggerreg = {}
 commandresponse =  defaultdict(dict)
 
 # Declare Variables (to be moved to config file later)
@@ -68,24 +68,6 @@ def addLoggingLevel(levelName, levelNum, methodName=None):
     setattr(logging.getLoggerClass(), methodName, logForLevel)
     setattr(logging, methodName, logToRoot)
 
-class Miniconf:
-    """ this class is only there to enable backward compatibility with
-    grottserver runs standalone with no other Grott components available"""
-
-    def __init__(self, vrmserver):
-            """set default configuration settings"""
-            self.verrel = vrmserver
-            self.loglevel = "DEBUG"
-            self.verbose = True
-            self.mode = "serversa"
-            self.serverpassthrough = False
-            self.serverip = "0.0.0.0"
-            self.serverport = 5781
-            #self.serverip = "0.0.0.0"
-            self.httpport = 5782
-            self.apirespwait = 0.1                                                                  #Time to sleep waiting on API response
-            self.inverterrespwait = 10                                                              #Totaal time in seconds to wait on Iverter Response
-            self.dataloggerrespwait = 5
 
 # Formats multi-line data
 def format_multi_line(prefix, string, size=80):
@@ -166,7 +148,7 @@ def htmlsendresp(self, responserc, responseheader,  responsetxt) :
         self.send_header('Content-type', responseheader)
         self.end_headers()
         self.wfile.write(responsetxt)
-        if verbose: print("\t - Grotthttpserver - http response send: ", responserc, responseheader, responsetxt)
+        logger.debug(f"Grotthttpserver - http response send:  {responserc}, {responseheader}, {responsetxt}")
 
 def createtimecommand(self, protocol,deviceid,loggerid,sequenceno) :
         protocol = protocol
@@ -192,9 +174,7 @@ def createtimecommand(self, protocol,deviceid,loggerid,sequenceno) :
         #print(header)
         body = header + body
         body = bytes.fromhex(body)
-        if verbose:
-            print("\t - Grottserver - Time plain body : ")
-            print(format_multi_line("\t\t ",body))
+        logger.debug(f'Time plain body : {format_multi_line("  ",body)}')
 
         if protocol != "02" :
             #encrypt message
@@ -202,9 +182,7 @@ def createtimecommand(self, protocol,deviceid,loggerid,sequenceno) :
             crc16 = calc_crc(bytes.fromhex(body))
             body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
 
-        if verbose:
-            print("\t - Grottserver - Time command created :")
-            print(format_multi_line("\t\t ",body))
+        logger.debug(f'Time command created  : {format_multi_line("  ",body)}')
 
         #just to be sure delete register info
         try:
@@ -213,6 +191,208 @@ def createtimecommand(self, protocol,deviceid,loggerid,sequenceno) :
             pass
 
         return(body)
+
+class registerInfo:
+    def __init__(self, regno, value):
+        self.regno = regno
+        self.retrievalDate = datetime.now()
+        self.value = value
+        
+class inverterInfo:
+    def __init__(self, inverterid, dataloggerid, inverterno):
+        self.inverterid = inverterid
+        self.dataloggerid = dataloggerid
+        self.inverterno = inverterno
+        self.registerInfos = {}
+    
+    def add_register(self, register_info):
+        self.registerInfos[register_info.regno] = register_info
+    
+    def update_register(self, regno, value):
+        if regno in self.registerInfos:
+            self.registerInfos[regno].value = value
+            self.registerInfos[regno].retrievalDate = datetime.now()
+        else:
+            self.registerInfos[regno] = registerInfo(regno, value)
+    
+    
+class loggerInfo:
+    def __init__(self, dataloggerid, protocol, ip, port):
+        self.dataloggerid = dataloggerid
+        self.protocol = protocol
+        self.ip = ip
+        self.port = port
+        self.inverters = {}
+        self.registerInfos = {}
+
+    def add_inverter(self, inverter):
+        self.inverters[inverter.inverterid] = inverter
+    
+    def inverter_exists(self, inverterid):
+        return inverterid in self.inverters
+    
+    def get_inverter(self, inverterid):
+        return self.inverters.get(inverterid, None) 
+    
+    
+    def getinverterno(self):
+        #return first inverter no
+        for inverterid, inverter in self.inverters.items():
+            return inverter.inverterno
+        return None
+    
+    def add_register(self, register_info):
+        self.registerInfos[register_info.regno] = register_info 
+    
+    def update_register(self, regno, value):
+        logger.info(f"Datalogger {self.dataloggerid}: Updating register {regno} with value {value}")
+        if regno in self.registerInfos:
+            self.registerInfos[regno].value = value
+            self.registerInfos[regno].retrievalDate = datetime.now()
+        else:
+            self.registerInfos[regno] = registerInfo(regno, value)
+
+
+class loggerRegistry: 
+    def __init__(self):
+        self.loggers = {}
+        self.inverters = {}
+
+    def add_logger(self, dataloggerid, protocol, ip, port):
+        if dataloggerid not in self.loggers:
+            logger.info(f"Adding logger: {dataloggerid}, Protocol: {protocol}, IP: {ip}, Port: {port}")
+            self.loggers[dataloggerid] = loggerInfo(dataloggerid, protocol, ip, port)
+        else:
+            logger.warning(f"Logger with ID {dataloggerid} already exists. Skipping addition.")
+
+    def update_logger(self, dataloggerid, protocol, ip, port):
+        if dataloggerid not in self.loggers:
+            logger.info(f"Adding logger: {dataloggerid}, Protocol: {protocol}, IP: {ip}, Port: {port}")
+            self.loggers[dataloggerid] = loggerInfo(dataloggerid, protocol, ip, port)
+        elif (self.loggers[dataloggerid].protocol != protocol or self.loggers[dataloggerid].ip != ip or self.loggers[dataloggerid].port != port):
+            logger.info(f"Updating logger: {dataloggerid}, Protocol: {protocol}, IP: {ip}, Port: {port}")
+            self.loggers[dataloggerid].protocol = protocol
+            self.loggers[dataloggerid].ip = ip
+            self.loggers[dataloggerid].port = port  
+
+
+    def add_inverter(self, dataloggerid, inverterid, inverterno):
+        if inverterid not in self.inverters:
+            logger.info(f"Adding inverter: {inverterid} with number {inverterno} to registry")
+            inverter = inverterInfo(inverterid, dataloggerid, inverterno)
+            self.inverters[inverterid] = inverter
+        if dataloggerid in self.loggers and not self.loggers[dataloggerid].inverter_exists(inverterid):
+            logger.info(f"Adding inverter: {inverterid} with number {inverterno} to logger {dataloggerid}")
+            self.loggers[dataloggerid].add_inverter(inverter)
+    
+    def getQueueName(self, dataloggerid):
+        if dataloggerid in self.loggers:
+            logger = self.loggers[dataloggerid]
+            return logger.ip + "_" + str(logger.port)
+        else:
+            raise KeyError(f"Datalogger ID {dataloggerid} not found")
+
+    def __getitem__(self, dataloggerid):
+        if dataloggerid in self.loggers:
+            return self.loggers[dataloggerid]
+        else:
+            raise KeyError(f"Datalogger ID {dataloggerid} not found")
+
+    def find_datalogger_by_inverter(self, inverterid):
+        for dataloggerid, logger in self.loggers.items():
+            if inverterid in logger.inverters:
+                return logger
+        return None
+
+    def get_datalogger(self,name):
+        if name in self.loggers:
+            return self.loggers[name]
+        else:
+            return self.find_datalogger_by_inverter(name)
+        return None
+
+class commandResponseDict:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.commands = defaultdict()
+
+    def set(self, key, value):
+        with self.lock:
+            self.commands[key] = value
+
+    def get(self, key):
+        with self.lock:
+            return self.commands.get(key)
+
+def getQueueName(datalogger):
+    return datalogger.ip + "_" + str(datalogger.port)
+
+loggerreg = loggerRegistry()
+responses = commandResponseDict()
+
+
+def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, value=None, startregister=None, endregister=None):
+    protocol = datalogger.protocol
+    loggerid = datalogger.dataloggerid
+    deviceid = "01"
+    global sendseq
+    sendseq += 1
+    bodybytes = loggerid.encode('ISO-8859-1')
+    body = bodybytes.hex()
+    if protocol == "06" :
+        body = body + "0000000000000000000000000000000000000000"
+    body = body + "{:04x}".format(int(register))
+    #assumption now only 1 reg query; other put below end register
+    body = body + "{:04x}".format(int(register))
+    #calculate length of payload = body/2 (str => bytes) + 2 bytes invertid + command.
+    bodylen = int(len(body)/2+2)
+
+    #device id for datalogger is by default "01" for inverter deviceid is inverterno!
+    deviceid = "01"
+    # test if it is inverter command and set
+    if sendcommand == "05":
+        deviceid = datalogger.getinverterno()
+    logger.info(f"Selected deviceid :  {deviceid} protocol: {protocol}")
+    messageSeqNo = "{:04x}".format(sendseq)
+    header = messageSeqNo + "00" + protocol + "{:04x}".format(bodylen) + deviceid + sendcommand
+    body = header + body
+    body = bytes.fromhex(body)
+
+    logger.info(f'Unencrypted Plain body : {format_multi_line("  ",body)}')
+
+    if protocol == "06" or protocol == "05":
+        #encrypt message
+        body = decrypt(body)
+        crc16 = calc_crc(bytes.fromhex(body))
+        body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
+        logger.info(f'Encrypted Plain body : {format_multi_line("  ",body)}')
+    
+    qname = getQueueName(datalogger) 
+    send_queuereg[qname].put(body)
+    logger.info(f"{qname} - command queued, body {body} seqno {messageSeqNo}")
+    return messageSeqNo
+
+   
+
+def getRegisterValue(conf, usedseqno, sendcommand, register, formatval="dec"):
+    if sendcommand == "05" :
+        wait = round(conf.inverterrespwait/conf.apirespwait)
+    else :
+        wait = round(conf.dataloggerrespwait/conf.apirespwait)
+
+    logging.info(f"Waiting for command response: {wait} cycles of {conf.apirespwait} seconds each")
+    regkey = "{:04x}".format(int(register))
+    for x in range(wait):
+        logging.info(f"Waiting for command response, cycle {x+1} of {wait}")
+        if usedseqno in responses.commands:
+            comresp = responses.get(usedseqno)
+            return comresp
+        else:
+                #Set retry waiting cycle time loop for datalogger or inverter
+            time.sleep(conf.apirespwait)
+    logging.warning("No valid response received within the wait time")
+    return registerInfo(register, "No valid response received")
+
 
 class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
     def __init__(self, conf, send_queuereg, *args):
@@ -325,20 +505,14 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     # test if datalogger  and / or inverter id is specified.
                     try:
                         if sendcommand == "05" :
-                            inverterid_found = False
                             try:
                                 #test if inverter id is specified and get loggerid
                                 inverterid = urlquery["inverter"][0]
-                                for key in loggerreg.keys() :
-                                    for key2 in loggerreg[key].keys() :
-                                        if key2 == inverterid :
-                                            dataloggerid = key
-                                            inverterid_found = True
-                                            break
+                                datalogger = loggerreg.find_datalogger_by_inverter(inverterid)
                             except :
-                                inverterid_found = False
+                                pass
 
-                            if not inverterid_found :
+                            if not datalogger :
                                 responsetxt = b'no or no valid invertid specified'
                                 responserc = 400
                                 responseheader = "text/html"
@@ -358,14 +532,12 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 # no set default format op dec.
                                 formatval = "dec"
 
-                        if sendcommand == "19" :
+                        elif sendcommand == "19" :
                             # if read datalogger info.
-                            dataloggerid = urlquery["datalogger"][0]
-
                             try:
                                 # Verify dataloggerid is specified
-                                dataloggerid = urlquery["datalogger"][0]
-                                test = loggerreg[dataloggerid]
+                                datalogger = loggerreg[urlquery["datalogger"][0]]
+                        
                             except:
                                 responsetxt = b'invalid datalogger id '
                                 responserc = 400
@@ -407,10 +579,10 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         htmlsendresp(self,responserc,responseheader,responsetxt)
                         return
 
-                bodybytes = dataloggerid.encode('ISO-8859-1')
+                bodybytes = datalogger.dataloggerid.encode('ISO-8859-1')
                 body = bodybytes.hex()
 
-                if loggerreg[dataloggerid]["protocol"] == "06" :
+                if datalogger.protocol == "06" :
                     body = body + "0000000000000000000000000000000000000000"
                 body = body + "{:04x}".format(int(register))
                 #assumption now only 1 reg query; other put below end register
@@ -422,10 +594,10 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 deviceid = "01"
                 # test if it is inverter command and set
                 if sendcommand == "05":
-                    deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
-                    print("\t - Grotthttpserver: selected deviceid :", deviceid)
+                    deviceid = datalogger.getinverterno()
+                    logger.info(f"Selected deviceid :  {deviceid}")
 
-                header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
+                header = "{:04x}".format(sendseq) + "00" + datalogger.protocol + "{:04x}".format(bodylen) + deviceid + sendcommand
                 body = header + body
                 body = bytes.fromhex(body)
 
@@ -433,7 +605,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     print("\t - Grotthttpserver - unencrypted get command:")
                     print(format_multi_line("\t\t ",body))
 
-                if loggerreg[dataloggerid]["protocol"] != "02" :
+                if datalogger.protocol != "02" :
                     #encrypt message
                     body = decrypt(body)
                     crc16 = calc_crc(bytes.fromhex(body))
@@ -445,7 +617,8 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     print(format_multi_line("\t\t ",body))
 
                 # queue command
-                qname = loggerreg[dataloggerid]["ip"] + "_" + str(loggerreg[dataloggerid]["port"])
+                qname = getQueueName(datalogger) #loggerreg[dataloggerid]["ip"] + "_" + str(loggerreg[dataloggerid]["port"])
+                logger.info(f"{qname} - get command created, body {body}")
                 self.send_queuereg[qname].put(body)
                 responseno = "{:04x}".format(sendseq)
                 regkey = "{:04x}".format(int(register))
@@ -572,20 +745,13 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     # test if datalogger  and / or inverter id is specified.
                     try:
                         if sendcommand == "06" :
-                            inverterid_found = False
                             try:
                                 #test if inverter id is specified and get loggerid
                                 inverterid = urlquery["inverter"][0]
-                                for key in loggerreg.keys() :
-                                    for key2 in loggerreg[key].keys() :
-                                        if key2 == inverterid :
-                                            dataloggerid = key
-                                            inverterid_found = True
-                                            break
-                            except :
-                                inverterid_found = False
-
-                            if not inverterid_found :
+                                datalogger = loggerreg.find_datalogger_by_inverter(inverterid)
+                            except:
+                                pass
+                            if not datalogger :
                                 responsetxt = b'no or invalid invertid specified'
                                 responserc = 400
                                 responseheader = "text/html"
@@ -594,13 +760,10 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                         if sendcommand == "18" :
                             # if read datalogger info.
-                            dataloggerid = urlquery["datalogger"][0]
-
                             try:
                                 # Verify dataloggerid is specified
                                 dataloggerid = urlquery["datalogger"][0]
-                                test = loggerreg[dataloggerid]
-
+                                datalogger = loggerreg[dataloggerid]
                             except:
                                 responsetxt = b'invalid datalogger id '
                                 responserc = 400
@@ -747,7 +910,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 bodybytes = dataloggerid.encode('ISO-8859-1')
                 body = bodybytes.hex()
 
-                if loggerreg[dataloggerid]["protocol"] == "06" :
+                if datalogger.protocol == "06" :
                     body = body + "0000000000000000000000000000000000000000"
 
                 if sendcommand == "06" :
@@ -775,11 +938,11 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 deviceid = "01"
                 # test if it is inverter command and set deviceid
                 if sendcommand in ("06","10") :
-                    deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
+                    deviceid = loggerreg[dataloggerid].getinverterno()
                 print("\t - Grotthttpserver: selected deviceid :", deviceid)
 
                 #create header
-                header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
+                header = f"{sendseq:04x}00{loggerreg[dataloggerid].protocol}{bodylen:04x}{deviceid}{sendcommand}"
                 body = header + body
                 body = bytes.fromhex(body)
 
@@ -787,14 +950,15 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     print("\t - Grotthttpserver - unencrypted put command:")
                     print(format_multi_line("\t\t ",body))
 
-                if loggerreg[dataloggerid]["protocol"] != "02" :
+                if datalogger.protocol != "02" :
                     #encrypt message
                     body = decrypt(body)
                     crc16 = calc_crc(bytes.fromhex(body))
                     body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
 
                 # queue command
-                qname = loggerreg[dataloggerid]["ip"] + "_" + str(loggerreg[dataloggerid]["port"])
+                qname = getQueueName(datalogger) #loggerreg[dataloggerid]["ip"] + "_" + str(loggerreg[dataloggerid]["port" ])
+                logger.info(f"{qname} - put command created, body {body}")
                 self.send_queuereg[qname].put(body)
                 responseno = "{:04x}".format(sendseq)
                 if sendcommand == "10":
@@ -882,6 +1046,59 @@ class GrottHttpServer:
         except Exception as e:
             logger.info("httpserver start error %s",e)
 
+class recordInfo: 
+    def __init__(self, origData):
+        self.origData = origData
+        self.header = origData[0:8].hex() # use .hex() for bytes-like objects (faster and clearer) than "".join("{:02x}".format(n) for n in origData[0:8])
+        self.sequencenumber = self.header[0:4]
+        self.protocol = self.header[6:8]
+        self.datalength = int(self.header[8:12],16)
+        self.deviceid = self.header[12:14]
+        self.rectype = self.header[14:16] 
+        if self.protocol in ("05","06") :
+            self.decryptedData = decrypt(self.origData)
+        else:
+            self.decryptedData =  self.origData.hex()
+        self.loggerid = codecs.decode(self.decryptedData[16:36], "hex").decode('ISO-8859-1')
+        self.inverterid = ""
+        logger.debug(f"Header: {self.header}")
+        logger.info(f"Record type: {self.rectype} loggerid: {self.loggerid} deviceid: {self.deviceid} protocol: {self.protocol} seqno: {self.sequencenumber}")
+    
+    def validRecord(self):
+        # validate record length
+        if self.protocol in ("05","06") :
+            lcrc = 8
+        else :
+            lcrc = 6
+        if self.datalength + lcrc != len(self.origData):
+            logger.warning(f"Invalid Record (length) detected: Expected: {self.datalength + lcrc} Received: {len(self.origData)}")
+            return False
+        # validate crc for protocol 05 and 06
+        if self.protocol in ("05","06") :
+            crccalc = calc_crc(self.origData[0: self.datalength + 6])
+            crcrec = int.from_bytes(self.origData[self.datalength + 6:self.datalength + 8],"big")
+            if crccalc != crcrec :
+                logger.warning(f"Invalid Record (CRC) detected: Expected: {crcrec:04x} Calculated: {crccalc:04x}")
+                return False
+        return True
+    
+    def infoStr(self): 
+        return f"recordInfo - Header: {self.header} - Protocol: {self.protocol} - DeviceID: {self.deviceid} - RecordType: {self.rectype} LoggerID: {self.loggerid} - InverterID: {self.inverterid} - DataLength: {self.datalength}"
+    
+    def debugOrigData(self):
+        return f"recordInfo - OrigData: \n{format_multi_line('\t',self.origData)}"
+    
+    def debugDecryptedData(self):
+        return f"recordInfo - DecryptedData: \n{format_multi_line('\t',bytes.fromhex(self.decryptedData))}"
+    
+    def setInverterID(self):
+        if self.protocol in ("02","05") :
+            inverterEncoded = self.decryptedData[36:56]
+        else :
+            inverterEncoded =  self.decryptedData[76:96]
+        self.inverterid = codecs.decode(inverterEncoded, "hex").decode('ISO-8859-1')
+        
+    
 class sendrecvserver:
     def __init__(self, conf, host, port, send_queuereg):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -951,12 +1168,12 @@ class sendrecvserver:
         logger.info("thread for: {0} ending".format(trname))
 
     def handle_readable_socket(self, conf, s, trname):
-        logger.debug("handle_readble_socket, input received on socket : %s",s)
+        logger.info("handle_readble_socket, input received on socket : %s",s)
         # test if comming from growatt server and set flag
 
         try:
             if s is self.server:
-                logger.debug("handle_readable_socket, no connection with peer yet, will be established")
+                logger.info("handle_readable_socket, no connection with peer yet, will be established")
                 self.handle_new_connection(conf,s)
 
             else:
@@ -996,22 +1213,23 @@ class sendrecvserver:
                             data = msgbuffer[0:reclength+lcrc]
                             #set last reference time (for removing inactive connections)
                             self.lastmessage[s] = time.time()
-                            header = "".join("{:02x}".format(n) for n in data[0:8])
-                            rectype = header[14:16]
-                            seqno = header[0:4]
+                            recInfo = recordInfo(data)
+
                             # pass data to growatt
                             try:
                                 if conf.serverpassthrough:
                                     sRaddr = s.getpeername()
-                                    if sRaddr[0] == conf.growattip and sRaddr[1] == int(conf.growattport) :
-                                        logger.debug("handle_readble_socket, data from growatt server will be ignored")
-                                        logger.debug("handle_readble_socket, original data:\n{0} \n".format(format_multi_line("\t",data,80)))
+                                    if sRaddr[0] == self.forwardip and sRaddr[1] == int(self.forwardport):
+                                        logger.info("handle_readble_socket, data from growatt server will be ignored")
+                                        logger.info(recInfo.infoStr())
+                                        logger.info(recInfo.debugOrigData())
+                                        logger.info(recInfo.debugDecryptedData())
                                         #no further processing needed
                                         return()
                                     else:
                                         logger.debug("handle_readble_socket, process data to sent to growatt server")
 
-                                        if rectype in ("03", "04", "16","50", "1b", "19","20","29"):
+                                        if recInfo.rectype in ("03", "04", "16","50", "1b", "19","20","29"):
                                             #forward only specific recordtypes
                                             #get qname for growatt server based on growatt address and client addres
                                             gLaddr = self.channel[s].getsockname()
@@ -1026,8 +1244,8 @@ class sendrecvserver:
 
                                             logger.debug("handle_readble_socket, data forwarded to growatt server")
                                             #wait for ack from growatt server
-                                            if rectype == "03":
-                                                self.waitsync(seqno,s,2)
+                                            if recInfo.rectype == "03":
+                                                self.waitsync(recInfo.seqno,s,2)
                                             #    time.sleep(0.1)
                                         else:
                                             logger.debug("handle_readble_socket, data filtered and not forwarded to growatt server:")
@@ -1037,7 +1255,7 @@ class sendrecvserver:
                                 logger.warning("handle_readble_socket, continue without forwarding")
 
                             #Process the data
-                            self.process_data(conf,s, data)
+                            self.process_data(conf,s, recInfo)
                             #create buffer with remaining messages
                             if buflength > reclength+lcrc:
                                 logger.debug("handle_readble_socket, process additional messages in buffer")
@@ -1138,19 +1356,20 @@ class sendrecvserver:
 
             #create queue
             self.send_queuereg[qname] = queue.Queue()
-            logger.debug("handle_new_connection, send queue created for: %s", qname)
+            logger.info("handle_new_connection, send queue created for: %s", qname)
 
             if conf.serverpassthrough:
                 #start thread for handling forward connection before client thread!!
                 forward = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 forward.connect((conf.growattip, conf.growattport))
-                logger.info(f"forward, connection with growatt server established: {conf.growattip}:{conf.growattport}")
-                logger.debug(f"forward, socket: {forward}")
-                gLaddr = forward.getsockname()
-                gqname =  gLaddr[0] + "_" + str(gLaddr[1])
                 #get actual growatt server address if DNS name is used in .ini settings
                 self.forwardip, self.forwardport = forward.getpeername()
+                logger.info(f"forward, connection with growatt server established: {conf.growattip}:{conf.growattport} ip is  {self.forwardip}:{self.forwardport}")
+                logger.info(f"forward, socket: {forward}")
+                gLaddr = forward.getsockname()
+                gqname =  gLaddr[0] + "_" + str(gLaddr[1])
                 self.send_queuereg[gqname] = queue.Queue()
+                logger.info("handle_new_connection, forward queue created for : %s", gqname)
 
                 #create forward channel pair
                 self.channel[connection] = forward
@@ -1253,7 +1472,7 @@ class sendrecvserver:
         returncc = 0
         return(returncc)
 
-    def process_data(self, conf, s, data):
+    def process_data(self, conf, s, recInfo):
 
         #self.send_queuereg[qname].put(response)
 
@@ -1268,169 +1487,127 @@ class sendrecvserver:
             response = None
 
             # Display data
-            logger.debug(f"process_data, data received from : {client_address}:{client_port}")
-            logger.debug("\n{0}".format(format_multi_line("\t", data)))
+            logger.debug(f"Data received from : {client_address}:{client_port}")
 
             #validate data (Length + CRC for 05/06)
             #join gebeurt nu meerdere keren! Stroomlijnen!!!!
-            vdata = "".join("{:02x}".format(n) for n in data)
+            vdata = "".join("{:02x}".format(n) for n in recInfo.origData)
             validatecc = validate_record(vdata)
             #validatecc = 0
             if validatecc != 0 :
-                logger.debug("process_data, invalid data record received, processing stopped for this record returncode: %s",validatecc)
+                logger.info("process_data, invalid data record received, processing stopped for this record returncode: %s",validatecc)
                 #Create response if needed?
                 #self.send_queuereg[qname].put(response)
                 return
-
-            # Create header
-            header = "".join("{:02x}".format(n) for n in data[0:8])
-            protocol = header[6:8]
-            sequencenumber = header[0:4]
-            deviceid = header[12:14]
-            protocol = header[6:8]
-            #command = header[14:16]
-            rectype = header[14:16]
-            if protocol in ("05","06") :
-                result_string = decrypt(data)
-            else :
-                result_string = "".join("{:02x}".format(n) for n in data)
-            logger.debug(f"process_data, plain record: ")
-            logger.debug("\n{0}".format(format_multi_line("\t", result_string)))
-            loggerid = result_string[16:36]
-            loggerid = codecs.decode(loggerid, "hex").decode('ISO-8859-1')
-
             # Prepare response
-            if rectype in ("16"):
+            if recInfo.rectype in ("16"):
                 # if ping send data as reply
-                response = data
+                response = recInfo.origData
                 logger.debug(f"process_data, 16- ping response:")
                 logger.debug("\n{0}".format(format_multi_line("\t\t ", response)))
 
                 #     #v0.0.14a: create temporary also logger record at ping (to support shinelink without inverters)
 
-                try:
-                    loggerreg[loggerid].update({"ip" : client_address, "port" : client_port, "protocol" : header[6:8]})
-                except:
-                    loggerreg[loggerid] = {"ip" : client_address, "port" : client_port, "protocol" : header[6:8]}
-                    logger.debug(f"process_data, datalogger id: {loggerid} added by ping: {loggerreg[loggerid]}")
-
-
+                loggerreg.update_logger(recInfo.loggerid, ip = client_address, port = client_port, protocol = recInfo.protocol)
+                # logger.debug(f"process_data, datalogger id: {loggerid} added by ping: {loggerreg[loggerid]}")
             #v0.0.14: remove "29" (no response will be sent for this record!)
-            elif rectype in ("03", "04", "50", "1b", "20"):
+            elif recInfo.rectype in ("03", "04", "50", "1b", "20"):
                 # if datarecord send ack.
-                print("\t - Grottserver - " + header[12:16] + " data record received")
-
-                # create ack response
-                if header[6:8] == '02':
+                if recInfo.protocol == '02':
                     #protocol 02, unencrypted ack
-                    response = bytes.fromhex(header[0:8] + '0003' + header[12:16] + '00')
+                    response = bytes.fromhex(recInfo.header[0:8] + '0003' + recInfo.header[12:16] + '00')
                 else:
                     # protocol 05/06, encrypted ack
-                    headerackx = bytes.fromhex(header[0:8] + '0003' + header[12:16] + '47')
+                    headerackx = bytes.fromhex(recInfo.header[0:8] + '0003' + recInfo.header[12:16] + '47')
                     # Create CRC 16 Modbus
                     crc16 = calc_crc(headerackx)
                     # create response
                     response = headerackx + crc16.to_bytes(2, "big")
-                if verbose:
-                    print("\t - Grottserver - Response: ")
-                    print(format_multi_line("\t\t", response))
+                
+                logger.debug(f"Response: {format_multi_line("\t\t", response)}")
+
+                loggerreg.update_logger(recInfo.loggerid, ip = client_address, port = client_port, protocol = recInfo.protocol  )   
+                recInfo.setInverterID()
+                loggerreg.add_inverter(recInfo.loggerid,recInfo.inverterid,recInfo.deviceid)
 
                 if conf.mode=="server" :
-                    procdatarc = self.process_data_record(conf,data)
-                    logger.debug("data record process ended with renturncode: %s",procdatarc)
+                    procdatarc = self.process_data_record(conf,recInfo)
+                    logger.debug("data record process ended with returncode: %s",procdatarc)
 
-                if rectype in ("03") :
+                if recInfo.rectype in ("03") :
                 # init record register logger/inverter id (including sessionid?)
                 # decrypt body.
-                    if header[6:8] in ("05","06") :
-                        #print("header1 : ", header[6:8])
-                        result_string = decrypt(data)
-                    else :
-                        result_string = data.hex()
-
-                    loggerid = result_string[16:36]
-                    loggerid = codecs.decode(loggerid, "hex").decode('ISO-8859-1')
-                    if header[6:8] in ("02","05") :
-                        inverterid = result_string[36:56]
-                    else :
-                        inverterid = result_string[76:96]
-                    inverterid = codecs.decode(inverterid, "hex").decode('ISO-8859-1')
-
-                    try:
-                        loggerreg[loggerid].update({"ip" : client_address, "port" : client_port, "protocol" : header[6:8]})
-                    except:
-                        loggerreg[loggerid] = {"ip" : client_address, "port" : client_port, "protocol" : header[6:8]}
-                        logger.debug("Datalogger id added by: %s", loggerid)
-
-                    #add invertid
-                    loggerreg[loggerid].update({inverterid : {"inverterno" : deviceid, "power" : 0}} )
-                    logger.debug("Inverter id added: %s", inverterid)
+                    
                     #send response
                     self.send_queuereg[qname].put(response)
                     #wait some time before response on announcement is processed (maybe create a waitsync routine?)
                     #self.waitsync(sequencenumber,s)
                     #time.sleep(5)
                     # Create time command en put on queue
-                    response = createtimecommand(self,protocol,deviceid,loggerid,"0001")
-                    if verbose: print("\t - Grottserver 03 announce data record processed")
+                    response = createtimecommand(self,recInfo.protocol,recInfo.deviceid,recInfo.loggerid,"0001")
+                    logger.debug("03 announce data record processed")
 
-            elif rectype in ("19","05","06","18"):
-                if verbose: print("\t - Grottserver - " + header[12:16] + " Command Response record received, no response needed")
+            elif recInfo.rectype in ("19","05","06","18"):
+                logger.info(f"No response needed: Command Response record received {recInfo.infoStr()}" )
 
                 offset = 0
-                if protocol in ("06") :
+                if recInfo.protocol in ("06") :
                     offset = 40
 
-                register = int(result_string[36+offset:40+offset],16)
-                if rectype == "05" :
+                register = int(recInfo.decryptedData[36+offset:40+offset],16)
+                if recInfo.rectype == "05" :
                     #value = result_string[40+offset:44+offset]
                     #v0.0.14: test if empty response is sent (this will give CRC code as values)
                     #print("length resultstring:", len(result_string))
                     #print("result starts on:", 48+offset)
-                    if len(result_string) == 48+offset :
-                        if verbose: print("\t - Grottserver - empty register get response recieved, response ignored")
+                    if len(recInfo.decryptedData) == 48+offset :
+                        logger.debug("Grottserver - empty register get response recieved, response ignored")
                     else:
-                        value = result_string[44+offset:48+offset]
-                elif rectype == "06" :
-                    result = result_string[40+offset:42+offset]
+                        value = recInfo.decryptedData[44+offset:48+offset]
+                elif recInfo.rectype == "06" :
+                    result = recInfo.decryptedData[40+offset:42+offset]
                     #print("06 response result :", result)
-                    value = result_string[42+offset:46+offset]
-                elif rectype == "18" :
-                    result = result_string[40+offset:42+offset]
+                    value = recInfo.decryptedData[42+offset:46+offset]
+                elif recInfo.rectype == "18" :
+                    result = recInfo.decryptedData[40+offset:42+offset]
+                    value = result # no value in 18 response, this is temporarily needed for new command response processing
                 else :
                     # "19" response take length into account
-                    valuelen = int(result_string[40+offset:44+offset],16)
+                    valuelen = int(recInfo.decryptedData[40+offset:44+offset],16)
 
                     #value = codecs.decode(result_string[44+offset:44+offset+valuelen*2], "hex").decode('ISO-8859-1')
-                    value = codecs.decode(result_string[44+offset:44+offset+valuelen*2], "hex").decode('ISO-8859-1')
+                    value = codecs.decode(recInfo.decryptedData[44+offset:44+offset+valuelen*2], "hex").decode('ISO-8859-1')
 
                 regkey = "{:04x}".format(register)
-                if rectype == "06" :
+                responseInfo = registerInfo(register,value)
+                logger.info(f'Register info regkey {regkey} : {responseInfo.value} recordInfo: {recInfo.infoStr()}')
+                responses.set(recInfo.sequencenumber, responseInfo)
+                if recInfo.rectype == "06" :
                     # command 06 response has ack (result) + value. We will create a 06 response and a 05 response (for reg administration)
                     commandresponse["06"][regkey] = {"value" : value , "result" : result}
                     commandresponse["05"][regkey] = {"value" : value}
-                if rectype == "18" :
+                if recInfo.rectype == "18" :
                     commandresponse["18"][regkey] = {"result" : result}
                 else :
                     #rectype 05 or 19
-                    commandresponse[rectype][regkey] = {"value" : value}
+                    commandresponse[recInfo.rectype][regkey] = {"value" : value}
 
                 response = None
 
-            elif rectype in ("10") :
-                if verbose: print("\t - Grottserver - " + header[12:16] + " record received, no response needed")
+            elif recInfo.rectype in ("10") :
+                logger.debug("Grottserver - " + recInfo.header[12:16] + " record received, no response needed")
 
-                startregister = int(result_string[76:80],16)
-                endregister = int(result_string[80:84],16)
-                value = result_string[84:86]
+                startregister = int(recInfo.decryptedData[76:80],16)
+                endregister = int(recInfo.decryptedData[80:84],16)
+                value = recInfo.decryptedData[84:86]
 
                 regkey = "{:04x}".format(startregister) + "{:04x}".format(endregister)
-                commandresponse[rectype][regkey] = {"value" : value}
+                commandresponse[recInfo.rectype][regkey] = {"value" : value}
 
                 response = None
 
-            elif rectype in ("29") :
-                if verbose: print("\t - Grottserver - " + header[12:16] + " record received, no response needed")
+            elif recInfo.rectype in ("29") :
+                logger.debug("Grottserver - " + recInfo.header[12:16] + " record received, no response needed")
                 response = None
 
             #elif rectype in ("99") :
@@ -1439,22 +1616,189 @@ class sendrecvserver:
             #    response = None
 
             else:
-                if verbose: print("\t - Grottserver - Unknown record received:")
-
+                logger.debug("Grottserver - " + recInfo.header[12:16] + " unknown record received, no response")
                 response = None
 
-            if response is not None:
+            if response is not None :
                 #qname = client_address + "_" + str(client_port)
-                if verbose:
-                    print("\t - Grottserver - Put response on queue: ", qname, " msg: ")
-                    print(format_multi_line("\t\t ", response))
+                logger.debug(f'Grottserver - Put response on queue: {qname} msg: {format_multi_line("    ", response)}')
                 self.send_queuereg[qname].put(response)
         except Exception as e:
             print("\t - Grottserver - exception in main server thread occured : ", e)
 
 
-class Server :
+def set_menu(section):
+    
+    menuconfig = {}
+    
+    if len(section)>0:
+        menuconfig[section]="active"
 
+    return menuconfig
+
+
+
+def testFlaskCreateDummyData():
+    #create some dummy data
+    datalogger = loggerreg.add_logger("DLG001", ip = "1.1.1.1", port = 1234, protocol = "02")       
+    loggerreg.add_inverter("DLG001","INV001","01")
+    loggerreg.add_inverter("DLG001","INV002","02")
+    datalogger = loggerreg.add_logger("DLG002", ip = "2.2.2.2", port = 2345, protocol = "05") 
+    loggerreg.add_inverter("DLG002","INV003","01")
+
+
+from flask import Flask, request, jsonify, render_template
+from flask.views import MethodView
+from flask_wtf import FlaskForm
+from wtforms import StringField, SubmitField, SelectField
+from wtforms.validators import DataRequired, Length
+
+class RegisterValueForm(FlaskForm):
+    targetSelect = SelectField('Target (inverter/datalogger)', choices=[], validators=[DataRequired()])
+    start = StringField('Start Register', validators=[DataRequired(), Length(min=1, max=10)])
+    end = StringField('End Register', validators=[DataRequired(), Length(min=1, max=10)])
+    value = StringField('Register Value')  # This field can be used to display the fetched value   
+    getValue = SubmitField('Get Register Value')
+    setValue = SubmitField('Set Register Value')
+
+
+class FlaskServer():
+    def __init__(self, conf, httphost, httpport, send_queuereg):
+        self.app = Flask(__name__)
+        self.app.config['SECRET_KEY'] = 'b248c447afda729f12954257ab22777af9c0699899348e6dc44810cf980176ef'
+        self.app.config['TEMPLATES_AUTO_RELOAD'] = True
+
+        self.httphost = httphost
+        self.httpport = httpport    
+        self.send_queuereg = send_queuereg
+        self.conf = conf
+        self.app.add_url_rule('/', view_func=self.Home.as_view('home', server=self))
+        self.app.add_url_rule('/registerOverview', view_func=self.RegisterOverview.as_view('registerOverview', server=self))
+        self.app.add_url_rule('/register', view_func=self.Register.as_view('register', server=self))
+
+    def run(self):
+        self.app.run(host=self.httphost, port=self.httpport, debug=False, use_reloader=False)    
+        logger.info(f"FlaskServer - Ready to listen at: {self.httphost}:{self.httpport}")
+    
+    def fillTargetChoices(self, choices):
+        dataloggers = loggerreg.loggers.values()
+        for datalogger in dataloggers:
+            name =  datalogger.dataloggerid
+            choices.append((name, f"Datalogger : {name}"))   
+            for inverterid in datalogger.inverters.keys():
+                choices.append((inverterid, f"Inverter : {inverterid} of Datalogger : {datalogger.dataloggerid}"))
+            
+    class Register(MethodView):
+        def __init__(self, server):
+            self.server = server
+#            testFlaskCreateDummyData()
+
+        def get(self):
+            form = RegisterValueForm()
+            self.server.fillTargetChoices(form.targetSelect.choices)
+            return render_template('register.html',  mc=set_menu('register'), loggerreg=loggerreg, form=form)
+
+        def post(self):
+            form = RegisterValueForm()
+            self.server.fillTargetChoices(form.targetSelect.choices)
+            if form.validate_on_submit():
+                if form.getValue.data:
+                    # Get the current value of the register
+                    name = form.targetSelect.data
+                    logger.info(f"Form submitted with target: {name}, start: {form.start.data}, end: {form.end.data}")
+                    if name in loggerreg.loggers:
+                        sendcommand = '19'
+                    else :
+                        sendcommand = '05'
+                    datalogger = loggerreg.get_datalogger(name)
+                    usedSeqNo = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data)
+                    regInfo = getRegisterValue(self.server.conf, usedSeqNo, sendcommand, form.start.data)
+                    form.value.data = regInfo.value
+                    if sendcommand == '05' :
+                        logger.info(f"Register value retrieved for inverter {name} register {form.start.data} : {regInfo.value}")
+                        inverter = datalogger.get_inverter(name)
+                        inverter.update_register(form.start.data, regInfo.value)
+                    else :
+                        logger.info(f"Register value retrieved for datalogger {name} register {form.start.data} : {regInfo.value}")
+                        datalogger.update_register(form.start.data, regInfo.value)
+                elif form.setValue.data:
+                    # Set the value of the register
+                    name = form.targetSelect.data
+                    logger.info(f"Form submitted to set value with target: {name}, start: {form.start.data}, end: {form.end.data}, value: {form.value.data}")
+                    if name in loggerreg.loggers:
+                        sendcommand = '18'
+                    else :
+                        sendcommand = '06'
+                    datalogger = loggerreg.get_datalogger(name)
+                    queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data, value=form.value.data)
+                # Process the form data (e.g., save to database)
+                
+            return render_template('register.html', mc=set_menu('register'), loggerreg=loggerreg, form=form)
+
+    class RegisterOverview(MethodView):
+        def __init__(self, server):
+            self.server = server
+
+        def get(self):
+            return render_template('registerOverview.html',  mc=set_menu('registerOverview'), loggerreg=loggerreg)
+
+
+    class About(MethodView):
+        def get(self):
+            return render_template('about.html', mc=set_menu('home'))
+
+    
+    class Home(MethodView):
+        def __init__(self, server):
+            self.server = server
+
+        def get(self):
+            queueinfo = []
+            for key, value in self.server.send_queuereg.items():
+                queueinfo.append((key, value.qsize()))
+            queueinfo.sort(key=lambda x: x[0])
+            current_level = logging.getLevelName(logger.level)
+            return render_template('home.html', mc=set_menu('home'), threadCount = threading.active_count(),
+                                   memory=psutil.Process(os.getpid()).memory_info().rss/1024**2, 
+                                   activeThreads=threading.enumerate(), current_level=current_level,
+                                   queueinfo=queueinfo, loggerreg=loggerreg, commandresponse=commandresponse)
+        
+        def post(self):
+            # Get the selected log level from the form
+            log_level = request.form.get('log_level', 'INFO').upper()
+            if log_level in [ 'DEBUGV','DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+                logger.setLevel(getattr(logging, log_level))
+                logger.info(f"Log level changed to {log_level}")
+            else:
+                logger.warning("Invalid log level selected")
+            return self.get()
+
+
+    class RegisterAPI(MethodView):
+        def __init__(self, server):
+            self.server = server
+
+        def get(self):
+            register_start = request.args.get('start', default=0, type=int)
+            register_end = request.args.get('end', default=-1, type=int)
+            target = request.args.get('target', default='', type=str)
+            name = request.args.get('name', default='', type=str)
+
+            datalogger = loggerreg.get_datalogger(name)
+            if datalogger:
+                if target.lower() == 'inverter' :
+                    sendcommand = '05'  
+                else :
+                    sendcommand = '19'
+                queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=register_start)
+                regInfo = getRegisterValue(self.server.conf, sendcommand, register_start)
+            else:
+                value = "Datalogger not found"
+            return render_template('register.html', mc=set_menu('register'), loggerreg=loggerreg, register_id=register_start, value = regInfo.value)
+    
+
+
+class Server :
     def __init__(self, conf):
         #set loglevel
         logger.setLevel(conf.loglevel.upper())
@@ -1468,17 +1812,20 @@ class Server :
         logger.info("Grott server started")
         logger.info("mode: %s",conf.mode)
         send_queuereg = {}
-        #loggerreg = {}
         # response from command is written is this variable (for now flat, maybe dict later)
         #commandresponse =  defaultdict(dict)
 
         http_server = GrottHttpServer(conf, conf.serverip, conf.httpport, send_queuereg)
+        flask_server = FlaskServer(conf, "0.0.0.0", 5000, send_queuereg)
         #connection_server = sendrecvserver(conf.serverip, conf.serverport, send_queuereg)
         connection_server = sendrecvserver(conf,"0.0.0.0", conf.serverport, send_queuereg)
         httpname = "httpserver_" + conf.serverip + ":" + str(conf.httpport)
         servername = "conserver_" + conf.serverip + ":" + str(conf.serverport)
         connection_server_thread = threading.Thread(target=connection_server.run,name=servername,args=[conf])
         http_server_thread = threading.Thread(target=http_server.run,name=httpname,args=[conf])
+        flask_thread = threading.Thread(target=flask_server.run,name="flaskserver")
+        flask_thread.daemon = True  # Ensures the thread exits when the main program exits
+        flask_thread.start()
         http_server_thread.start()
         connection_server_thread.start()
 
@@ -1490,7 +1837,7 @@ class Server :
             #list active connections/threads
             logger.debug("Main, available connections:")
             p = psutil.Process()
-            clist = p.connections(kind='inet')
+            clist = p.net_connections(kind='inet')
             for item in clist:
                 logger.debug(item)
             logger.debug("Main, available threads:")
@@ -1498,30 +1845,21 @@ class Server :
                 logger.debug("\t- %s",thread.name)
 
 if __name__ == "__main__":
-    """main module: be aware this is only exectuted if grottserver runs standalone!"""
+    """main module: New entry for people running the new combined grottserver make grott.py obsolete"""
     addLoggingLevel("DEBUGV", logging.DEBUG - 5)
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s")
     logger.info("Grottserver Version: %s",vrmserver)
-
-    #set gmode environment to override mode to standalone
-    os.environ["gmode"] = "serversa"
-
+    logger.info("Grottserver will run in combined mode")
     try:
-        test = Conf.mode
-        logger.debug("Grottserver initiated via Grott Main")
-    except NameError :
-        logger.info("Grottserver will run in standalone mode")
-        try:
-            # process config file:
-            from grottconf import Conf
-            confserver = True
-            conf = Conf(vrmserver)
-            logger.debug("Configuration being set by grottconf")
-            #change loglevel might be changed after config processing.
-            logger.setLevel(conf.loglevel.upper())
-        except Exception as e:
-            logger.info("Minimal pre-defined default configuration being used: %s",e)
-            conf = Miniconf(vrmserver)
+        # process config file:
+        confserver = True
+        conf = Conf(vrmserver)
+        logger.debug("Configuration being set by grottconf")
+        #change loglevel might be changed after config processing.
+        logger.setLevel(conf.loglevel.upper())
+    except Exception as e:
+        logger.error(f"Unable to load config: {e}")
+        exit()
 
     server = Server(conf)
     try:
