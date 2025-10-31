@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block metatags %}
+<title>Grott</title>
+<meta name="description" content="Grott">
+{% endblock %}
+
+{% block contents %}
+<div class="container">
+    <h1 style="margin-top:37px;">Register Overview</h1>
+        {% for dataloggerid, datalogger in loggerreg.loggers.items() %}
+            <p class="lead">Datalogger: {{ dataloggerid }}</p>
+            <table id="Register" class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Register</th>
+                    <th>Retrieval date</th>
+                    <th>Value</th>	
+                </tr>
+            </thead>
+            <tbody>
+            {% for regInfo in datalogger.registerInfos.values() %}
+                <tr>
+                    <td>{{ regInfo.regno }}</td>
+                    <td>{{ regInfo.retrievalDate }}</td>
+                    <td>{{ regInfo.value }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+	        </table>
+        {% endfor %}
+        {% for inverterid, inverter in loggerreg.inverters.items() %}
+            <p class="lead">Inverter: {{ inverterid }}</p>
+            <table id="Register" class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Register</th>
+                    <th>Retrieval date</th>
+                    <th>Value</th>	
+                </tr>
+            </thead>
+            <tbody>
+            {% for regInfo in inverter.registerInfos.values() %}
+                <tr>
+                    <td>{{ regInfo.regno }}</td>
+                    <td>{{ regInfo.retrievalDate }}</td>
+                    <td>{{ regInfo.value }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+	        </table>
+        {% endfor %}
+
+
+	<script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+<script>
+    $(document).ready(function() {
+        $('#threads').DataTable();
+    });
+</script>
+
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+{"ALO_1125_1249": {
+            "acchargeenergytoday": {"value" :666, "length" : 2, "type" : "numx", "divide" : 1, "register" : 1125}, 
+            "acchargeenergytotal": {"value" :670, "length" : 4, "type" : "numx", "divide" : 1, "register" : 1126},
+            "acchargepower"      : {"value" :678,"length" : 4, "type" : "numx", "divide" : 1, "register" : 1128},
+            "70%_invpoweradjust" : {"value" :686,"length" : 2, "type" : "numx", "divide" : 1, "register" : 1130},
+            "extraacpowertogrid" : {"value" :690, "length" : 4, "type" : "numx", "divide" : 1, "register" : 1131},
+            "eextratoday"        : {"value" :698, "length" : 4, "type" : "numx", "divide" : 10, "register" : 1133},
+            "eextratotal"        : {"value" :704, "length" : 4, "type" : "numx", "divide" : 10, "register" : 1135},
+            "esystemtoday"       : {"value" :712, "length" : 4, "type" : "numx", "divide" : 10, "register" : 1137},
+            "esystemtotal"       : {"value" :720, "length" : 4, "type" : "numx", "divide" : 10, "register" : 1139}
+        }}

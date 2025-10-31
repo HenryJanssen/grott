@@ -1,0 +1,7 @@
+{ "ALO06" :  {
+            "decrypt"           : {"value" :"True"},
+            "datalogserial"     : {"value" :16, "length" : 10, "type" : "text", "incl" : "yes"},
+            "pvserial"          : {"value" :76, "length" : 10, "type" : "text", "divide" : 10},
+            "date"              : {"value" :136, "divide" : 10},
+            "datastart"         : {"value" :150, "length" : 2, "type" : "num","incl" : "no"}
+            } }

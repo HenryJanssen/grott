@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block metatags %}
+<title>Grott</title>
+<meta name="description" content="Grott">
+{% endblock %}
+
+{% block contents %}
+<div class="container">
+    <h1 style="margin-top:37px;">Info page</h1>
+	
+	<h2>Set Logging Level</h2>
+    <form method="POST">
+        <label for="log_level">Choose Log Level:</label>
+        <select name="log_level" id="log_level">
+            <option value="DEBUGV">DEBUGV</option>
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO" selected>INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+            <option value="CRITICAL">CRITICAL</option>
+        </select>
+        <button type="submit">Set Debug Level</button>
+    </form>
+    <p class="lead">Current Log Level: {{ current_level }}</p>
+    <p class="lead">Active Threads: {{ threadCount }}</p>
+    <p class="lead">Grottserver memory in use: {{ memory }}</p>
+    
+    <table id="threads" class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Ident</th>
+            <th>Native_Id</th>
+            <th>Is Alive</th>
+            <th>Is Daemon</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for thread in activeThreads %}
+        <tr>
+            <td>{{ thread.name }}</td>
+            <td>{{ thread.ident }}</td>
+            <td>{{ thread.native_id }}</td>
+            <td>{{ thread.is_alive() }}</td>
+            <td>{{ thread.daemon }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+	</table>
+
+     <table id="Inverters" class="table table-striped">
+    <thead>
+        <tr>
+            <th>Datalogger</th>
+            <th>Inverter</th>
+            <th>Inverter No</th>	
+            <th>Ip</th>
+            <th>Port</th>
+            <th>Protocol</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for datalogger, info in loggerreg.loggers.items() %}
+            {% for inverter in info.inverters.values() %}
+            <tr>
+                <td>{{ datalogger }}</td>
+                <td>{{ inverter.inverterid }}</td>
+                <td>{{ inverter.inverterno }}</td>
+                <td>{{ info.ip }}</td>
+                <td>{{ info.port }}</td>
+                <td>{{ info.protocol }}</td>
+            </tr>
+            {% endfor %}
+        {% endfor %}
+    </tbody>
+	</table>
+
+	
+    <p class="lead">Send_quereg: </p>
+    <table id="queueInfo" class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Queue size</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for info in queueinfo %}
+        <tr>
+            <td>{{ info[0] }}</td>
+            <td>{{ info[1] }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>	    
+	</table>
+<script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+<script>
+    $(document).ready(function() {
+        $('#threads').DataTable();
+    });
+</script>
+
+</div>
+{% endblock %}

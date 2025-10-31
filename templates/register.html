@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block metatags %}
+<title>Register</title>
+<meta name="description" content="Register content">
+{% endblock %}
+
+{% block contents %}
+
+<div class="container">
+    <h1 style="margin-top:37px;">Register page</h1>
+    <table id="Inverters" class="table table-striped">
+    <thead>
+        <tr>
+            <th>Datalogger</th>
+            <th>Inverter</th>
+            <th>Inverter No</th>	
+            <th>Ip</th>
+            <th>Port</th>
+            <th>Protocol</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for datalogger, info in loggerreg.loggers.items() %}
+            {% for inverter in info.inverters.values() %}
+            <tr>
+                <td>{{ datalogger }}</td>
+                <td>{{ inverter.inverterid }}</td>
+                <td>{{ inverter.inverterno }}</td>
+                <td>{{ info.ip }}</td>
+                <td>{{ info.port }}</td>
+                <td>{{ info.protocol }}</td>
+            </tr>
+            {% endfor %}
+        {% endfor %}
+    </tbody>
+	</table>
+	
+	<form method="POST">
+        {{ form.hidden_tag() }}
+        <p>
+            {{ form.targetSelect.label }}<br>
+            {{ form.targetSelect }}
+        </p>
+ 		<p>
+            {{ form.start.label }}<br>
+            {{ form.start(size=32) }}
+        </p>
+		<p>
+            {{ form.end.label }}<br>
+            {{ form.end(size=32) }}
+        </p>
+
+		<p>
+            {{ form.value.label }}<br>
+            {{ form.value(size=32) }}
+        </p>
+
+        <p>{{ form.getValue() }}</p>
+        <p>{{ form.setValue() }}</p>	
+    </form>
+   
+<script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+<script>
+    $(document).ready(function() {
+        $('#threads').DataTable();
+    });
+</script>
+
+</div>
+{% endblock %}

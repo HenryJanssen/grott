@@ -1,0 +1,13 @@
+{"ALO_45_89V1": {
+            "IPF"               : {"value" :318, "length" : 2, "type" : "numx", "divide" : 1, "register" : 45,"incl" : "no"},
+            "ResetCHK"          : {"value" :318, "length" : 2, "type" : "numx", "divide" : 1, "register" : 46,"incl" : "no"},
+            "DeratingMode"      : {"value" :318, "length" : 2, "type" : "numx", "divide" : 1, "register" : 47,"incl" : "no"},
+            "epv1today"         : {"value" :278, "length" : 4, "type" : "numx", "divide" : 10, "register" : 48},
+            "epv1total"         : {"value" :286, "length" : 4, "type" : "numx", "divide" : 10, "register" : 50},
+            "epv2today"         : {"value" :294, "length" : 4, "type" : "numx", "divide" : 10, "register" : 52},
+            "epv2total"         : {"value" :302, "length" : 4, "type" : "numx", "divide" : 10, "register" : 54},
+            "epvtotal"          : {"value" :310, "length" : 4, "type" : "numx", "divide" : 10, "register" : 56},
+            "rac"               : {"value" :318, "length" : 4, "type" : "numx", "divide" : 10, "register" : 58,"incl" : "no"},
+            "eractoday"         : {"value" :326, "length" : 4, "type" : "numx", "divide" : 10, "register" : 60,"incl" : "no"},
+            "eractotal"         : {"value" :334, "length" : 4, "type" : "numx", "divide" : 10, "register" : 62,"incl" : "no"}
+            } }
