@@ -160,14 +160,13 @@ def AutoCreateLayout(conf,recInfo) :
     # -"New type" Inverters  (TL-X, TL3, MAD, MIX, MAX, MIX, SPA, SPH )
     # -"SPF" Inverters, not yet covered in the AutoCreateLayout, while detection interferes with Classic type detection.
     #
-    logger.debug("automatic determine data layout started")
-    #create standard layout
     layout = recInfo.inverterid
-    logger.debug(f"Check if layout for inverter id: {layout} exists")
     if layout in conf.recorddict :
+        logger.debug(f"Layout for inverter id: {layout} exists and will be used")
         return layout
 
     logger.debug(f"Layout {layout }does not exist and will be created")
+    #create standard layout
 
 
     layout = "T" + recInfo.protocol + recInfo.deviceid + recInfo.rectype
@@ -184,19 +183,12 @@ def AutoCreateLayout(conf,recInfo) :
             if any(conf.invtypemap) :
                 logger.debug("invtypemap defined: %s",conf.invtypemap)
                 #process invetermap defined:
-                serialloc = 36
-                if recInfo.protocol == "06" :
-                    serialloc = 76
-                try:
-                    inverter_serial = codecs.decode(result_string[serialloc:serialloc+20], "hex").decode('ASCII')
-                    try:
-                        inverter_type = conf.invtypemap[inverter_serial].upper()
-                        logger.debug("Inverter serial: {0} found in invtypemap - using inverter type {1}".format(inverter_serial,inverter_type))
-                    except:
-                        logger.debug("Inverter serial: {0} not found invtypemap - using inverter type {1}".format(inverter_serial,inverter_type))
-
-                except:
-                    logger.critical("error in inverter_serial retrieval, try without invertypemap")
+                if recInfo.inverterid in conf.invtypemap :  
+                    inverter_type = conf.invtypemap[recInfo.inverterid].upper()
+                    logger.debug(f"Inverter serial: {recInfo.inverterid} found in invtypemap - using inverter type {inverter_type}")
+                else:
+                    logger.debug(f"Inverter serial: {recInfo.inverterid} not found in invtypemap - using inverter type AUTO")
+                    inverter_type = "AUTO"
 
         if inverter_type == "AUTO" :
             registergrp = {}
@@ -220,8 +212,8 @@ def AutoCreateLayout(conf,recInfo) :
             #getgroup start from baselayout
             grouploc = conf.recorddict[layout]["datastart"]["value"]
             for group in range(5) :
-                groupstart = result_string[grouploc : grouploc+4]
-                groupend = result_string[grouploc + 4 : grouploc+8]
+                groupstart = recInfo.decryptedData[grouploc : grouploc+4]
+                groupend = recInfo.decryptedData[grouploc + 4 : grouploc+8]
                 registergrp[group] = { "start" : int(groupstart,16), "end" : int(groupend,16), "grouploc" : grouploc}
                 # calculate next group start location (if any)
                 grouploc = grouploc + 8 + (int(groupend,16) - int (groupstart,16) +1)*4
@@ -366,7 +358,6 @@ def procdata(conf,recInfo):
             #process only keyword needs to be included (default):
                 if ((include) or (conf.includeall)):
                     if "type" in conf.recorddict[layout][keyword] :
-                        #try if key type is specified
                         keytype = conf.recorddict[layout][keyword]["type"]
                     else:
                         keytype = "num"  #if not default is num
@@ -399,9 +390,8 @@ def procdata(conf,recInfo):
                         if float(logdict[conf.recorddict[layout][keyword]["pos"]-1]) < 0 :
                             definedkey[keyword] = logdict[conf.recorddict[layout][keyword]["pos"]-1]
                         else : definedkey[keyword] = 0
-            except:
-                logger.warning(f"Error in keyword processing : {keyword} skipped")
-                #return(8)
+            except Exception as e:
+                logger.warning(f"Error in keyword processing : {keyword} skipped, defined position not present in data?! exception {e}")
 
     # test if pvserial was defined, if not take inverterid from config.
     device_defined = False

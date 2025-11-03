@@ -360,7 +360,7 @@ def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, val
 
     logger.info(f'Unencrypted Plain body : {format_multi_line("  ",body)}')
 
-    if protocol == "06" or protocol == "05":
+    if protocol != "02":
         #encrypt message
         body = decrypt(body)
         crc16 = calc_crc(bytes.fromhex(body))
@@ -1220,11 +1220,24 @@ class sendrecvserver:
                                 if conf.serverpassthrough:
                                     sRaddr = s.getpeername()
                                     if sRaddr[0] == self.forwardip and sRaddr[1] == int(self.forwardport):
-                                        logger.info("handle_readble_socket, data from growatt server will be ignored")
-                                        logger.info(recInfo.infoStr())
-                                        logger.info(recInfo.debugOrigData())
-                                        logger.info(recInfo.debugDecryptedData())
-                                        #no further processing needed
+                                        if conf.fullproxy:
+                                            logger.info("handle_readble_socket, fullproxy enabled, sent data to client")
+                                            #forward all data to client
+                                            gLaddr = self.channel[s].getsockname()
+                                            qname = gLaddr[0]+"_"+str(gLaddr[1])
+                                            try:
+                                                logger.info("fullproxy, put data {data} on client queue: %s",qname)
+                                                self.send_queuereg[qname].put(data)
+                                            except Exception as e:
+                                                logger.warning("fullproxy, exception in data forwarding %s", e)
+                                                return()
+                                            logger.debug("fullproxy, data forwarded to client")
+                                        else:
+                                            logger.info("handle_readble_socket, data from growatt server will be ignored")
+                                            logger.info(recInfo.infoStr())
+                                            logger.info(recInfo.debugOrigData())
+                                            logger.info(recInfo.debugDecryptedData())
+                                            #no further processing needed
                                         return()
                                     else:
                                         logger.debug("handle_readble_socket, process data to sent to growatt server")
@@ -1236,7 +1249,7 @@ class sendrecvserver:
                                             qname = gLaddr[0]+"_"+str(gLaddr[1])
 
                                             try:
-                                                logger.debug("handle_readble_socket, put data on growatt queue: %s",qname)
+                                                logger.info("handle_readble_socket, put data on growatt queue: %s",qname)
                                                 self.send_queuereg[qname].put(data)
                                             except Exception as e:
                                                 logger.warning("handle_readble_socket, exception in data forwarding %s", e)

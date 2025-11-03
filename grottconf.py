@@ -477,6 +477,7 @@ class Conf :
         if config.has_option("Growatt","port"): self.growattport = config.getint("Growatt","port")
         #Server
         if config.has_option("Server","serverpassthrough"): self.serverpassthrough = config.getboolean("Server","serverpassthrough")
+        if config.has_option("Server","fullproxy"): self.fullproxy = config.get("Server","fullproxy")
         if config.has_option("Server","serverip"): self.serverip = config.get("Server","serverip")
         if config.has_option("Server","serverport"): self.serverport = config.getint("Server","serverport")
         if config.has_option("Server","httpport"): self.httpport = config.getint("Server","httpport")
