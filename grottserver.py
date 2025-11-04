@@ -1223,10 +1223,10 @@ class sendrecvserver:
                                         if conf.fullproxy:
                                             logger.info("handle_readble_socket, fullproxy enabled, sent data to client")
                                             #forward all data to client
-                                            gLaddr = self.channel[s].getsockname()
+                                            gLaddr = self.channel[s].getpeername()
                                             qname = gLaddr[0]+"_"+str(gLaddr[1])
                                             try:
-                                                logger.info("fullproxy, put data {data} on client queue: %s",qname)
+                                                logger.info(f"fullproxy, put data {data} on client queue: {qname}")
                                                 self.send_queuereg[qname].put(data)
                                             except Exception as e:
                                                 logger.warning("fullproxy, exception in data forwarding %s", e)
