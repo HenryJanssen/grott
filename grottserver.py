@@ -1242,8 +1242,8 @@ class sendrecvserver:
                                     else:
                                         logger.debug("handle_readble_socket, process data to sent to growatt server")
 
-                                        if recInfo.rectype in ("03", "04", "16","50", "1b", "19","20","29"):
-                                            #forward only specific recordtypes
+                                        if conf.fullproxy or recInfo.rectype in ("03", "04", "16","50", "1b", "19","20","29"):
+                                            #forward only specific recordtypes, in full proxy all records are forwarded
                                             #get qname for growatt server based on growatt address and client addres
                                             gLaddr = self.channel[s].getsockname()
                                             qname = gLaddr[0]+"_"+str(gLaddr[1])
@@ -1778,6 +1778,7 @@ class FlaskServer():
         
         def post(self):
             # Get the selected log level from the form
+            action = request.form.get('action')
             log_level = request.form.get('log_level', 'INFO').upper()
             if log_level in [ 'DEBUGV','DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
                 logger.setLevel(getattr(logging, log_level))
