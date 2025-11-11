@@ -251,7 +251,19 @@ class loggerInfo:
             self.registerInfos[regno].retrievalDate = datetime.now()
         else:
             self.registerInfos[regno] = registerInfo(regno, value)
-
+    
+    def get_register_response(self, register):
+        if register in self.registerInfos:
+            return self.registerInfos[register]
+        else:
+            return None
+    
+    def check_register_response(self, regno, startTimeStamp):
+        if regno in self.registerInfos:
+            reg_info = self.registerInfos[regno]
+            if reg_info.retrievalDate >= startTimeStamp:
+                return True
+        return False
 
 class loggerRegistry: 
     def __init__(self):
@@ -311,6 +323,25 @@ class loggerRegistry:
             return self.find_datalogger_by_inverter(name)
         return None
 
+    def update_register_response(self, dataloggerid, inverterid, regno, value):
+        logger = self.get_datalogger(dataloggerid)
+        if logger:
+            logger.update_register(regno, value)
+            inverter = logger.get_inverter(inverterid)
+            if inverter:
+                inverter.update_register(regno, value)
+            else:
+                logger.warning(f"Inverter ID {inverterid} not found in logger {dataloggerid}. Cannot update register {regno}.")
+        else:
+            logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update register {regno}.")
+    
+    def check_register_response(self, datalogger, regno, startTimeStamp):
+        if datalogger.registerInfos:
+            reg_info = logger.registerInfos[regno]
+            if reg_info.retrievalDate >= startTimeStamp:
+                return True
+        return False
+
 class commandResponseDict:
     def __init__(self):
         self.lock = threading.Lock()
@@ -335,8 +366,7 @@ def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, val
     protocol = datalogger.protocol
     loggerid = datalogger.dataloggerid
     deviceid = "01"
-    global sendseq
-    sendseq += 1
+    sendseq = 1
     bodybytes = loggerid.encode('ISO-8859-1')
     body = bodybytes.hex()
     if protocol == "06" :
@@ -369,12 +399,12 @@ def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, val
     
     qname = getQueueName(datalogger) 
     send_queuereg[qname].put(body)
-    logger.info(f"{qname} - command queued, body {body} seqno {messageSeqNo}")
-    return messageSeqNo
+    logger.info(f"{qname} - command queued, body {body} datalogger {loggerid} register {register} command {sendcommand}")
+    return datetime.now()
 
    
 
-def getRegisterValue(conf, usedseqno, sendcommand, register, formatval="dec"):
+def getRegisterValue(startTimeStamp, datalogger, sendcommand, register):
     if sendcommand == "05" :
         wait = round(conf.inverterrespwait/conf.apirespwait)
     else :
@@ -384,9 +414,9 @@ def getRegisterValue(conf, usedseqno, sendcommand, register, formatval="dec"):
     regkey = "{:04x}".format(int(register))
     for x in range(wait):
         logging.info(f"Waiting for command response, cycle {x+1} of {wait}")
-        if usedseqno in responses.commands:
-            comresp = responses.get(usedseqno)
-            return comresp
+        
+        if datalogger.check_register_response(datalogger, register, startTimeStamp):
+            return datalogger.get_register_response(register)
         else:
                 #Set retry waiting cycle time loop for datalogger or inverter
             time.sleep(conf.apirespwait)
@@ -1228,15 +1258,11 @@ class sendrecvserver:
                                             try:
                                                 logger.info(f"fullproxy, put data {data} on client queue: {qname}")
                                                 self.send_queuereg[qname].put(data)
+                                                logger.debug("fullproxy, data forwarded to client")
                                             except Exception as e:
                                                 logger.warning("fullproxy, exception in data forwarding %s", e)
-                                                return()
-                                            logger.debug("fullproxy, data forwarded to client")
                                         else:
                                             logger.info("handle_readble_socket, data from growatt server will be ignored")
-                                            logger.info(recInfo.infoStr())
-                                            logger.info(recInfo.debugOrigData())
-                                            logger.info(recInfo.debugDecryptedData())
                                             #no further processing needed
                                         return()
                                     else:
@@ -1587,23 +1613,24 @@ class sendrecvserver:
                 else :
                     # "19" response take length into account
                     valuelen = int(recInfo.decryptedData[40+offset:44+offset],16)
-
-                    #value = codecs.decode(result_string[44+offset:44+offset+valuelen*2], "hex").decode('ISO-8859-1')
                     value = codecs.decode(recInfo.decryptedData[44+offset:44+offset+valuelen*2], "hex").decode('ISO-8859-1')
 
                 regkey = "{:04x}".format(register)
                 responseInfo = registerInfo(register,value)
+                
                 logger.info(f'Register info regkey {regkey} : {responseInfo.value} recordInfo: {recInfo.infoStr()}')
-                responses.set(recInfo.sequencenumber, responseInfo)
                 if recInfo.rectype == "06" :
                     # command 06 response has ack (result) + value. We will create a 06 response and a 05 response (for reg administration)
                     commandresponse["06"][regkey] = {"value" : value , "result" : result}
                     commandresponse["05"][regkey] = {"value" : value}
-                if recInfo.rectype == "18" :
+                elif recInfo.rectype == "18" :
                     commandresponse["18"][regkey] = {"result" : result}
-                else :
-                    #rectype 05 or 19
+                elif recInfo.rectype == "19" :
                     commandresponse[recInfo.rectype][regkey] = {"value" : value}
+                    loggerreg.update_register_response(recInfo.loggerid, recInfo.inverterid, register, value)
+                else :
+                    commandresponse[recInfo.rectype][regkey] = {"value" : value}
+
 
                 response = None
 
@@ -1665,6 +1692,7 @@ from flask.views import MethodView
 from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, SelectField
 from wtforms.validators import DataRequired, Length
+import platform
 
 class RegisterValueForm(FlaskForm):
     targetSelect = SelectField('Target (inverter/datalogger)', choices=[], validators=[DataRequired()])
@@ -1674,6 +1702,11 @@ class RegisterValueForm(FlaskForm):
     getValue = SubmitField('Get Register Value')
     setValue = SubmitField('Set Register Value')
 
+def when_ready(server):
+    # Called just after the server is started
+    logger.info("Gunicorn server is ready. Starting other services...")
+    # Start background servers here for Linux
+    background_threads = server.start_background_servers()
 
 class FlaskServer():
     def __init__(self, conf, httphost, httpport, send_queuereg):
@@ -1690,8 +1723,40 @@ class FlaskServer():
         self.app.add_url_rule('/register', view_func=self.Register.as_view('register', server=self))
 
     def run(self):
-        self.app.run(host=self.httphost, port=self.httpport, debug=False, use_reloader=False)    
-        logger.info(f"FlaskServer - Ready to listen at: {self.httphost}:{self.httpport}")
+        if conf.waitressServer:
+            from waitress import serve
+            serve(self.app, host=self.httphost, port=self.httpport, threads=2)
+        else:
+            # For Gunicorn server, is not working at the moment
+            from gunicorn.app.base import BaseApplication
+
+            class GunicornApp(BaseApplication):
+                def __init__(self, app, options=None):
+                    self.options = options or {}
+                    self.application = app
+                    super().__init__()
+
+                def load_config(self):
+                    for key, value in self.options.items():
+                        self.cfg.set(key.lower(), value)
+
+                def load(self):
+                    return self.application
+
+
+            options = {
+                'bind': f'{self.httphost}:{self.httpport}',
+                'workers': 1,
+                'worker_class': 'sync',
+                'timeout': 600,
+                'keepalive': 5,
+                'graceful_timeout': 30,
+                'preload_app': True,
+                'when_ready': when_ready,
+                'worker_connections': 100
+            }
+            self.server = Server(self.conf)  # Store server instance
+            GunicornApp(self.app, options).run()
     
     def fillTargetChoices(self, choices):
         dataloggers = loggerreg.loggers.values()
@@ -1724,8 +1789,8 @@ class FlaskServer():
                     else :
                         sendcommand = '05'
                     datalogger = loggerreg.get_datalogger(name)
-                    usedSeqNo = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data)
-                    regInfo = getRegisterValue(self.server.conf, usedSeqNo, sendcommand, form.start.data)
+                    startTimeStamp = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data)
+                    regInfo = getRegisterValue(startTimeStamp, usedSeqNo, sendcommand, form.start.data)
                     form.value.data = regInfo.value
                     if sendcommand == '05' :
                         logger.info(f"Register value retrieved for inverter {name} register {form.start.data} : {regInfo.value}")
@@ -1835,28 +1900,34 @@ class Server :
         connection_server = sendrecvserver(conf,"0.0.0.0", conf.serverport, send_queuereg)
         httpname = "httpserver_" + conf.serverip + ":" + str(conf.httpport)
         servername = "conserver_" + conf.serverip + ":" + str(conf.serverport)
-        connection_server_thread = threading.Thread(target=connection_server.run,name=servername,args=[conf])
-        http_server_thread = threading.Thread(target=http_server.run,name=httpname,args=[conf])
-        flask_thread = threading.Thread(target=flask_server.run,name="flaskserver")
-        flask_thread.daemon = True  # Ensures the thread exits when the main program exits
-        flask_thread.start()
-        http_server_thread.start()
-        connection_server_thread.start()
+        def start_background_servers():
+            connection_server_thread = threading.Thread(target=connection_server.run, name=servername, args=[conf])
+            http_server_thread = threading.Thread(target=http_server.run, name=httpname, args=[conf])
+            
+            # Make other threads daemon so they exit when main thread exits
+            connection_server_thread.daemon = True
+            http_server_thread.daemon = True
+            
+            # Start background threads
+            http_server_thread.start()
+            connection_server_thread.start()
+            return [connection_server_thread, http_server_thread]
 
-
-        while True:
-            time.sleep(60)
-            #start maintance processing
-
-            #list active connections/threads
-            logger.debug("Main, available connections:")
-            p = psutil.Process()
-            clist = p.net_connections(kind='inet')
-            for item in clist:
-                logger.debug(item)
-            logger.debug("Main, available threads:")
-            for thread in threading.enumerate():
-                logger.debug("\t- %s",thread.name)
+        # Run Flask/Gunicorn in main thread
+        try:
+#            if platform.system() == 'Windows':
+            if conf.waitressServer:               # On Waitress, start background servers before running Flask
+                background_threads = start_background_servers()
+                flask_server.run()
+            else: #gunicorn implementation not correct, call back is not working
+                # For Linux, we'll start the background servers in Gunicorn's when_ready callback
+                flask_server.conf = conf  # Pass conf to flask server
+                flask_server.start_background_servers = start_background_servers  # Pass the function
+                flask_server.run()
+        except KeyboardInterrupt:
+            logger.info("Shutting down server...")
+        finally:
+            logger.info("Server shutdown complete")
 
 if __name__ == "__main__":
     """main module: New entry for people running the new combined grottserver make grott.py obsolete"""

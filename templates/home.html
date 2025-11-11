@@ -20,8 +20,9 @@
             <option value="ERROR">ERROR</option>
             <option value="CRITICAL">CRITICAL</option>
         </select>
-        <button type="submit">Set Debug Level</button>
+        <button type="submit" name="action" value="button1">Set Debug Level</button>
     </form>
+    
     <p class="lead">Current Log Level: {{ current_level }}</p>
     <p class="lead">Active Threads: {{ threadCount }}</p>
     <p class="lead">Grottserver memory in use: {{ memory }}</p>

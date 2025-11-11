@@ -140,6 +140,7 @@ class Conf :
         self.addparm("Server","serverpassthrough",False,"gserverpassthrough")
         #httpserver
         self.addparm("Server","httpport",5782,"ghttpport")
+        self.addparm("Server","waitressServer",True,"gwaitressServer")
         #Time to sleep waiting on API response
         self.addparm("Server","apirespwait",0.5,"gapirespwait")
         #Totaal time in seconds to wait on Inverter Response
