@@ -335,13 +335,6 @@ class loggerRegistry:
         else:
             logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update register {regno}.")
     
-    def check_register_response(self, datalogger, regno, startTimeStamp):
-        if datalogger.registerInfos:
-            reg_info = logger.registerInfos[regno]
-            if reg_info.retrievalDate >= startTimeStamp:
-                return True
-        return False
-
 class commandResponseDict:
     def __init__(self):
         self.lock = threading.Lock()
@@ -415,7 +408,7 @@ def getRegisterValue(startTimeStamp, datalogger, sendcommand, register):
     for x in range(wait):
         logging.info(f"Waiting for command response, cycle {x+1} of {wait}")
         
-        if datalogger.check_register_response(datalogger, register, startTimeStamp):
+        if datalogger.check_register_response(register, startTimeStamp):
             return datalogger.get_register_response(register)
         else:
                 #Set retry waiting cycle time loop for datalogger or inverter
