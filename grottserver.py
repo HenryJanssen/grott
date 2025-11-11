@@ -323,17 +323,23 @@ class loggerRegistry:
             return self.find_datalogger_by_inverter(name)
         return None
 
-    def update_register_response(self, dataloggerid, inverterid, regno, value):
-        logger = self.get_datalogger(dataloggerid)
-        if logger:
-            logger.update_register(regno, value)
-            inverter = logger.get_inverter(inverterid)
+    def update_datalogger_register_response(self, dataloggerid, regno, value):
+        datalogger = self.get_datalogger(dataloggerid)
+        if datalogger:
+            datalogger.update_register(regno, value)
+        else:
+            logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update register {regno}.")
+    
+    def update_inverter_register_response(self, dataloggerid, inverterid, regno, value):
+        datalogger = self.get_datalogger(dataloggerid)
+        if datalogger:
+            inverter = datalogger.get_inverter(inverterid)
             if inverter:
                 inverter.update_register(regno, value)
             else:
                 logger.warning(f"Inverter ID {inverterid} not found in logger {dataloggerid}. Cannot update register {regno}.")
         else:
-            logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update register {regno}.")
+            logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update inverter register {regno}.")
     
 class commandResponseDict:
     def __init__(self):
@@ -404,7 +410,7 @@ def getRegisterValue(startTimeStamp, datalogger, sendcommand, register):
         wait = round(conf.dataloggerrespwait/conf.apirespwait)
 
     logging.info(f"Waiting for command response: {wait} cycles of {conf.apirespwait} seconds each")
-    regkey = "{:04x}".format(int(register))
+    register = int(register)
     for x in range(wait):
         logging.info(f"Waiting for command response, cycle {x+1} of {wait}")
         
@@ -1611,7 +1617,7 @@ class sendrecvserver:
                 regkey = "{:04x}".format(register)
                 responseInfo = registerInfo(register,value)
                 
-                logger.info(f'Register info regkey {regkey} : {responseInfo.value} recordInfo: {recInfo.infoStr()}')
+                logger.info(f'Register {register} info regkey {regkey} : {responseInfo.value} recordInfo: {recInfo.infoStr()}')
                 if recInfo.rectype == "06" :
                     # command 06 response has ack (result) + value. We will create a 06 response and a 05 response (for reg administration)
                     commandresponse["06"][regkey] = {"value" : value , "result" : result}
@@ -1620,7 +1626,7 @@ class sendrecvserver:
                     commandresponse["18"][regkey] = {"result" : result}
                 elif recInfo.rectype == "19" :
                     commandresponse[recInfo.rectype][regkey] = {"value" : value}
-                    loggerreg.update_register_response(recInfo.loggerid, recInfo.inverterid, register, value)
+                    loggerreg.update_datalogger_register_response(recInfo.loggerid, register, value)
                 else :
                     commandresponse[recInfo.rectype][regkey] = {"value" : value}
 
