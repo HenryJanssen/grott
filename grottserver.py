@@ -1790,7 +1790,7 @@ class FlaskServer():
                         sendcommand = '05'
                     datalogger = loggerreg.get_datalogger(name)
                     startTimeStamp = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data)
-                    regInfo = getRegisterValue(startTimeStamp, usedSeqNo, sendcommand, form.start.data)
+                    regInfo = getRegisterValue(startTimeStamp, datalogger, sendcommand, form.start.data)
                     form.value.data = regInfo.value
                     if sendcommand == '05' :
                         logger.info(f"Register value retrieved for inverter {name} register {form.start.data} : {regInfo.value}")
@@ -1870,7 +1870,7 @@ class FlaskServer():
                 else :
                     sendcommand = '19'
                 queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=register_start)
-                regInfo = getRegisterValue(self.server.conf, sendcommand, register_start)
+                regInfo = getRegisterValue(self.server.conf, datalogger, sendcommand, register_start)
             else:
                 value = "Datalogger not found"
             return render_template('register.html', mc=set_menu('register'), loggerreg=loggerreg, register_id=register_start, value = regInfo.value)
