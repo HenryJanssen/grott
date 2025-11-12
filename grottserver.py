@@ -362,41 +362,74 @@ responses = commandResponseDict()
 
 
 def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, value=None, startregister=None, endregister=None):
+    """
+    Queue a register command (GET or PUT).
+    
+    For GET commands (05, 19): reads register value
+    For PUT commands (06, 10, 18): writes value to register
+    
+    Args:
+        send_queuereg: queue registry
+        datalogger: datalogger info object
+        sendcommand: command type ('05', '06', '10', '18', '19')
+        register: register number (for single register commands)
+        value: value to write (for write commands; None for read commands)
+        startregister: start register (for multiregister command '10')
+        endregister: end register (for multiregister command '10')
+    """
     protocol = datalogger.protocol
     loggerid = datalogger.dataloggerid
-    deviceid = "01"
     sendseq = 1
+    
+    # Build body starting with logger ID
     bodybytes = loggerid.encode('ISO-8859-1')
     body = bodybytes.hex()
-    if protocol == "06" :
+    
+    if protocol == "06":
         body = body + "0000000000000000000000000000000000000000"
-    body = body + "{:04x}".format(int(register))
-    #assumption now only 1 reg query; other put below end register
-    body = body + "{:04x}".format(int(register))
-    #calculate length of payload = body/2 (str => bytes) + 2 bytes invertid + command.
-    bodylen = int(len(body)/2+2)
-
-    #device id for datalogger is by default "01" for inverter deviceid is inverterno!
-    deviceid = "01"
-    # test if it is inverter command and set
-    if sendcommand == "05":
+    
+    # Handle different command types
+    if sendcommand == "10":
+        # Multiregister write (startregister, endregister, value)
+        body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(int(endregister)) + value
+    elif sendcommand == "06":
+        # Inverter register write (register, value in hex format)
+        value_hex = "{:04x}".format(int(value))
+        body = body + "{:04x}".format(int(register)) + value_hex
+    elif sendcommand == "18":
+        # Datalogger register write (register, value_length, value)
+        value_hex = value.encode('ISO-8859-1').hex()
+        valuelen = int(len(value_hex) / 2)
+        body = body + "{:04x}".format(int(register)) + "{:04x}".format(valuelen) + value_hex
+    else:
+        # Read commands (05, 19): register start and end are same
+        body = body + "{:04x}".format(int(register)) + "{:04x}".format(int(register))
+    
+    # Calculate body length
+    bodylen = int(len(body) / 2 + 2)
+    
+    # Determine device ID
+    deviceid = "01"  # Default for datalogger
+    if sendcommand in ("05", "06", "10"):  # Inverter commands
         deviceid = datalogger.getinverterno()
-    logger.info(f"Selected deviceid :  {deviceid} protocol: {protocol}")
+    
+    logger.info(f"Selected deviceid: {deviceid} protocol: {protocol}")
     messageSeqNo = "{:04x}".format(sendseq)
     header = messageSeqNo + "00" + protocol + "{:04x}".format(bodylen) + deviceid + sendcommand
     body = header + body
     body = bytes.fromhex(body)
-
+    
     logger.info(f'Unencrypted Plain body : {format_multi_line("  ",body)}')
-
+    
+    # Encrypt if needed
     if protocol != "02":
-        #encrypt message
         body = decrypt(body)
         crc16 = calc_crc(bytes.fromhex(body))
         body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
         logger.info(f'Encrypted Plain body : {format_multi_line("  ",body)}')
     
-    qname = getQueueName(datalogger) 
+    # Queue the command
+    qname = getQueueName(datalogger)
     send_queuereg[qname].put(body)
     logger.info(f"{qname} - command queued, body {body} datalogger {loggerid} register {register} command {sendcommand}")
     return datetime.now()
@@ -1686,7 +1719,7 @@ def testFlaskCreateDummyData():
     loggerreg.add_inverter("DLG002","INV003","01")
 
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, make_response
 from flask.views import MethodView
 from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, SelectField
@@ -1720,6 +1753,13 @@ class FlaskServer():
         self.app.add_url_rule('/', view_func=self.Home.as_view('home', server=self))
         self.app.add_url_rule('/registerOverview', view_func=self.RegisterOverview.as_view('registerOverview', server=self))
         self.app.add_url_rule('/register', view_func=self.Register.as_view('register', server=self))
+        # Backward compatibility: port GrottHttpServer endpoints to Flask
+        # Provide same endpoints and behavior as the original GrottHttpRequestHandler
+        self.app.add_url_rule('/info', view_func=self._info, methods=['GET'])
+        self.app.add_url_rule('/help', view_func=self._help, methods=['GET'])
+        # datalogger and inverter endpoints accept both GET and PUT similar to GrottHttpServer
+        self.app.add_url_rule('/datalogger', view_func=self._datainv, methods=['GET','PUT'])
+        self.app.add_url_rule('/inverter', view_func=self._datainv, methods=['GET','PUT'])
 
     def run(self):
         if conf.waitressServer:
@@ -1793,11 +1833,8 @@ class FlaskServer():
                     form.value.data = regInfo.value
                     if sendcommand == '05' :
                         logger.info(f"Register value retrieved for inverter {name} register {form.start.data} : {regInfo.value}")
-                        inverter = datalogger.get_inverter(name)
-                        inverter.update_register(form.start.data, regInfo.value)
                     else :
                         logger.info(f"Register value retrieved for datalogger {name} register {form.start.data} : {regInfo.value}")
-                        datalogger.update_register(form.start.data, regInfo.value)
                 elif form.setValue.data:
                     # Set the value of the register
                     name = form.targetSelect.data
@@ -1864,17 +1901,207 @@ class FlaskServer():
 
             datalogger = loggerreg.get_datalogger(name)
             if datalogger:
-                if target.lower() == 'inverter' :
-                    sendcommand = '05'  
-                else :
+                if target.lower() == 'inverter':
+                    sendcommand = '05'
+                else:
                     sendcommand = '19'
-                queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=register_start)
-                regInfo = getRegisterValue(self.server.conf, datalogger, sendcommand, register_start)
+                # Use the new queueRegisterCommand/getRegisterValue flow
+                startTimeStamp = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=register_start)
+                regInfo = getRegisterValue(startTimeStamp, datalogger, sendcommand, register_start)
+                return jsonify({'value': regInfo.value})
             else:
                 value = "Datalogger not found"
-            return render_template('register.html', mc=set_menu('register'), loggerreg=loggerreg, register_id=register_start, value = regInfo.value)
-    
+                return jsonify({'value': value})
 
+    # --- Ported handlers from GrottHttpRequestHandler for backward compatibility ---
+    def _info(self):
+        # emulate original info endpoint
+        try:
+            logger.info("FlaskServer - Status requested via /info")
+            # Log some runtime info to allow operator inspection in logs
+            logger.info(" - Grottserver #active threads count: %s", threading.active_count())
+            try:
+                import os as _os, psutil as _psutil
+                logger.info(" - Grottserver memory in use : %s MB", _psutil.Process(_os.getpid()).memory_info().rss/1024**2)
+            except Exception:
+                logger.info(" - Grottserver PSUTIL not available no process information can be printed")
+
+            logger.info(" - Grottserver connection queue : %s", list(self.send_queuereg.keys()))
+            return make_response("<h2>Grottserver info generated, see log for details</h2>", 200)
+        except Exception as e:
+            logger.warning("Exception in /info: %s", e)
+            return make_response("Internal Server Error", 500)
+
+    def _help(self):
+        return make_response(b'No help available yet', 200)
+
+    def _datainv(self):
+        # Combined handler for /datalogger and /inverter. Determine which based on path.
+        try:
+            path = request.path.lstrip('/')
+            is_datalogger = path == 'datalogger'
+
+            if request.method == 'GET':
+                # map to original logic for GET
+                if is_datalogger:
+                    sendcommand = '19'
+                    logger.debug("FlaskServer - datalogger GET received: %s", request.args)
+                else:
+                    sendcommand = '05'
+                    logger.debug("FlaskServer - inverter GET received: %s", request.args)
+
+                if not request.args:
+                    # no args => return logger registry info (JSON representation)
+                    try:
+                        data = json.dumps({k: v.__dict__ for k, v in loggerreg.loggers.items()}).encode('ISO-8859-1')
+                    except Exception:
+                        data = json.dumps(list(loggerreg.loggers.keys())).encode('ISO-8859-1')
+                    return make_response(data, 200)
+
+                # validate command
+                command = request.args.get('command')
+                if not command or command not in ("register", "regall"):
+                    return make_response(b'no valid command entered', 400)
+
+                # get datalogger/inverter target
+                datalogger = None
+                if sendcommand == '05':
+                    inverterid = request.args.get('inverter')
+                    if inverterid:
+                        datalogger = loggerreg.find_datalogger_by_inverter(inverterid)
+                    if not datalogger:
+                        return make_response(b'no or no valid invertid specified', 400)
+                    formatval = request.args.get('format', 'dec')
+                    if formatval not in ("dec", "hex", "text"):
+                        return make_response(b'invalid format specified', 400)
+                else:
+                    try:
+                        datalogger = loggerreg[request.args.get('datalogger')]
+                    except Exception:
+                        return make_response(b'invalid datalogger id', 400)
+
+                if command == 'regall':
+                    comresp = commandresponse[sendcommand]
+                    return make_response(json.dumps(comresp).encode('ISO-8859-1'), 200)
+
+                # command == 'register' - use new queue-based flow
+                register = request.args.get('register')
+                try:
+                    if int(register) < 0 or int(register) >= 4096:
+                        return make_response(b'invalid reg value specified', 400)
+                except Exception:
+                    return make_response(b'invalid reg value specified', 400)
+
+                try:
+                    # Use new queueRegisterCommand and getRegisterValue flow
+                    startTimeStamp = queueRegisterCommand(self.send_queuereg, datalogger, sendcommand, register=int(register))
+                    regInfo = getRegisterValue(startTimeStamp, datalogger, sendcommand, int(register))
+                    
+                    # Format value if needed
+                    if sendcommand == '05':
+                        if formatval == 'dec':
+                            regInfo.value = int(regInfo.value, 16)
+                        elif formatval == 'text':
+                            regInfo.value = codecs.decode(regInfo.value, 'hex').decode('ISO-8859-1')
+                    
+                    response_dict = {'value': regInfo.value}
+                    return make_response(json.dumps(response_dict).encode('ISO-8859-1'), 200)
+                except Exception as e:
+                    logger.warning("Exception in GET register handler: %s", e)
+                    return make_response(b'no or invalid response received', 400)
+
+            elif request.method == 'PUT':
+                # Ported PUT logic using new queue-based flow
+                if is_datalogger:
+                    sendcommand = '18'
+                    logger.debug("FlaskServer - datalogger PUT received: %s", request.args)
+                else:
+                    sendcommand = '06'
+                    logger.debug("FlaskServer - inverter PUT received: %s", request.args)
+
+                command = request.args.get('command')
+                if not command or command not in ("register", "multiregister", "datetime"):
+                    return make_response(b'no valid command entered', 400)
+
+                # find datalogger
+                datalogger = None
+                if sendcommand == '06':
+                    inverterid = request.args.get('inverter')
+                    if inverterid:
+                        datalogger = loggerreg.find_datalogger_by_inverter(inverterid)
+                    if not datalogger:
+                        return make_response(b'no or invalid invertid specified', 400)
+                    formatval = request.args.get('format', 'dec')
+                else:
+                    try:
+                        dataloggerid = request.args.get('datalogger')
+                        datalogger = loggerreg[dataloggerid]
+                    except Exception:
+                        return make_response(b'invalid datalogger id', 400)
+
+                try:
+                    # validate and prepare values based on command type
+                    if command == 'register':
+                        register = request.args.get('register')
+                        value = request.args.get('value')
+                        try:
+                            if int(register) < 0 or int(register) >= 4096:
+                                return make_response(b'invalid reg value specified', 400)
+                        except Exception:
+                            return make_response(b'invalid reg value specified', 400)
+                        if value is None or value == '':
+                            return make_response(b'no value specified', 400)
+                        
+                        # Convert value format for inverter command if needed
+                        if sendcommand == '06':
+                            if formatval == 'dec':
+                                value = int(value)
+                            elif formatval == 'text':
+                                value = int(value.encode('ISO-8859-1').hex(), 16)
+                            elif formatval == 'hex':
+                                value = int(value, 16)
+                            # Validate range for 16-bit value
+                            if value < 0 or value > 65535:
+                                return make_response(b'invalid value specified', 400)
+                            value = int(value)
+                        
+                        # Use new queue-based flow for single register write
+                        queueRegisterCommand(self.send_queuereg, datalogger, sendcommand, register=int(register), value=value)
+                        return make_response(b'OK', 200)
+                    
+                    elif command == 'multiregister':
+                        try:
+                            startregister = int(request.args.get('startregister'))
+                            endregister = int(request.args.get('endregister'))
+                        except Exception:
+                            return make_response(b'invalid start/end register value specified', 400)
+                        value = request.args.get('value')
+                        if not value:
+                            return make_response(b'no value specified', 400)
+                        
+                        # Use new queue-based flow for multiregister write
+                        queueRegisterCommand(self.send_queuereg, datalogger, '10', 
+                                           startregister=startregister, endregister=endregister, value=value)
+                        return make_response(b'OK', 200)
+                    
+                    elif command == 'datetime':
+                        if sendcommand == '06':
+                            return make_response(b'datetime command not allowed for inverter', 400)
+                        
+                        # Use new queue-based flow for datetime write
+                        queueRegisterCommand(self.send_queuereg, datalogger, sendcommand, register=31, value=str(datetime.now().replace(microsecond=0)))
+                        return make_response(b'OK', 200)
+                    
+                    else:
+                        return make_response(b'command not defined or not available yet', 400)
+                
+                except Exception as e:
+                    logger.warning("Exception in PUT handler: %s", e)
+                    return make_response(b'no or invalid response received', 400)
+
+        except Exception as e:
+            logger.exception('Exception in datalogger/inverter handler: %s', e)
+            return make_response(b'Internal Server Error', 500)
 
 class Server :
     def __init__(self, conf):
