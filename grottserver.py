@@ -1655,13 +1655,16 @@ class sendrecvserver:
                     # command 06 response has ack (result) + value. We will create a 06 response and a 05 response (for reg administration)
                     commandresponse["06"][regkey] = {"value" : value , "result" : result}
                     commandresponse["05"][regkey] = {"value" : value}
+                    loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.inverterid, register, value)
                 elif recInfo.rectype == "18" :
                     commandresponse["18"][regkey] = {"result" : result}
+                    loggerreg.update_datalogger_register_response(recInfo.loggerid, register, value)
                 elif recInfo.rectype == "19" :
                     commandresponse[recInfo.rectype][regkey] = {"value" : value}
                     loggerreg.update_datalogger_register_response(recInfo.loggerid, register, value)
                 else :
                     commandresponse[recInfo.rectype][regkey] = {"value" : value}
+                    loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.inverterid, register, value)
 
 
                 response = None
@@ -1844,7 +1847,8 @@ class FlaskServer():
                     else :
                         sendcommand = '06'
                     datalogger = loggerreg.get_datalogger(name)
-                    queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data, value=form.value.data)
+                    startTimeStamp = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data, value=form.value.data)
+                    regInfo = getRegisterValue(startTimeStamp, datalogger, sendcommand, form.start.data)
                 # Process the form data (e.g., save to database)
                 
             return render_template('register.html', mc=set_menu('register'), loggerreg=loggerreg, form=form)
