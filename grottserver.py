@@ -234,6 +234,11 @@ class loggerInfo:
     def get_inverter(self, inverterid):
         return self.inverters.get(inverterid, None) 
     
+    def get_inverter_byinverterno(self, inverterno):
+        for inverterid, inverter in self.inverters.items():
+            if inverter.inverterno == inverterno: 
+                return inverter
+        return None
     
     def getinverterno(self):
         #return first inverter no
@@ -251,6 +256,12 @@ class loggerInfo:
             self.registerInfos[regno].retrievalDate = datetime.now()
         else:
             self.registerInfos[regno] = registerInfo(regno, value)
+ 
+    def update_inverter_register(self, inverterno, regno, value):
+        inverter = self.get_inverter_byinverterno(inverterno)
+        if inverter:
+            inverter.update_register(regno, value) 
+        logger.warning(f"Datalogger {self.dataloggerid}: did not find inverterno {inverterno} Updating inverter register {regno} with value {value} unsuccessful")
     
     def get_register_response(self, register):
         if register in self.registerInfos:
@@ -330,16 +341,12 @@ class loggerRegistry:
         else:
             logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update register {regno}.")
     
-    def update_inverter_register_response(self, dataloggerid, inverterid, regno, value):
+    def update_inverter_register_response(self, dataloggerid, inverterno, regno, value):
         datalogger = self.get_datalogger(dataloggerid)
         if datalogger:
-            inverter = datalogger.get_inverter(inverterid)
-            if inverter:
-                inverter.update_register(regno, value)
-            else:
-                logger.warning(f"Inverter ID {inverterid} not found in logger {dataloggerid}. Cannot update register {regno}.")
+            datalogger.update_inverter_register(inverterno, regno, value)
         else:
-            logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update inverter register {regno}.")
+            logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update inverter {inverterno} register {regno}.")
     
 class commandResponseDict:
     def __init__(self):
@@ -1655,7 +1662,7 @@ class sendrecvserver:
                     # command 06 response has ack (result) + value. We will create a 06 response and a 05 response (for reg administration)
                     commandresponse["06"][regkey] = {"value" : value , "result" : result}
                     commandresponse["05"][regkey] = {"value" : value}
-                    loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.inverterid, register, value)
+                    loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.deviceid, register, value)
                 elif recInfo.rectype == "18" :
                     commandresponse["18"][regkey] = {"result" : result}
                     loggerreg.update_datalogger_register_response(recInfo.loggerid, register, value)
@@ -1664,7 +1671,7 @@ class sendrecvserver:
                     loggerreg.update_datalogger_register_response(recInfo.loggerid, register, value)
                 else :
                     commandresponse[recInfo.rectype][regkey] = {"value" : value}
-                    loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.inverterid, register, value)
+                    loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.deviceid, register, value)
 
 
                 response = None
