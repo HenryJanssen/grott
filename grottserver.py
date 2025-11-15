@@ -236,7 +236,7 @@ class loggerInfo:
     
     def get_inverter_byinverterno(self, inverterno):
         for inverterid, inverter in self.inverters.items():
-            logger.info(f"Checking inverter {inverterid} with number {inverter.inverterno} against {inverterno}")
+            logger.info(f"Checking inverter {inverterid} with number {inverter.inverterno} type  {type(inverter.inverterno)}  against {inverterno} type  {type(inverterno)} ")
             if inverter.inverterno == inverterno: 
                 return inverter
         return None
