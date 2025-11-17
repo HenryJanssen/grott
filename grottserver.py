@@ -45,6 +45,14 @@ sendseq = 1
 #dataloggerrespwait = 5
 #ConnectionTimeout = 300 is now configurable in grott.ini
 
+from enum import Enum
+class CommandType(Enum):
+    InverterReadRegisters = "05"
+    InverterWriteSingleRegister = "06"
+    InverterWriteMultiRegisters = "10"
+    DataLoggerWriteRegisters = "18"
+    DataLoggerReadRegisters = "19"
+
 def addLoggingLevel(levelName, levelNum, methodName=None):
     if not methodName:
         methodName = levelName.lower()
@@ -197,12 +205,9 @@ class registerInfo:
         self.regno = regno
         self.retrievalDate = datetime.now()
         self.value = value
-        
-class inverterInfo:
-    def __init__(self, inverterid, dataloggerid, inverterno):
-        self.inverterid = inverterid
-        self.dataloggerid = dataloggerid
-        self.inverterno = inverterno
+
+class allRegistersInfo:
+    def __init__(self):
         self.registerInfos = {}
     
     def add_register(self, register_info):
@@ -215,18 +220,54 @@ class inverterInfo:
         else:
             self.registerInfos[regno] = registerInfo(regno, value)
     
+    def get_register_response(self, register):
+        if register in self.registerInfos:
+            return self.registerInfos[register]
+        else:
+            return None
+
+    def check_register_response(self, regno, startTimeStamp):
+        if regno in self.registerInfos:
+            reg_info = self.registerInfos[regno]
+            if reg_info.retrievalDate >= startTimeStamp:
+                return True
+        return False
     
-class loggerInfo:
+    def get_register_response_if_valid(self, register, startTimeStamp):
+        """
+        Optimized method: check and retrieve register in one call.
+        Returns the registerInfo if valid (exists and updated after startTimeStamp), else None.
+        Eliminates redundant double-lookup.
+        """
+        if register in self.registerInfos:
+            reg_info = self.registerInfos[register]
+            if reg_info.retrievalDate >= startTimeStamp:
+                return reg_info
+        return None
+    
+
+class inverterInfo(allRegistersInfo):
+    def __init__(self, inverterid, dataloggerid, inverterno):
+        self.inverterid = inverterid
+        self.dataloggerid = dataloggerid
+        self.inverterno = inverterno
+        super().__init__()
+    
+    
+class loggerInfo(allRegistersInfo):
     def __init__(self, dataloggerid, protocol, ip, port):
         self.dataloggerid = dataloggerid
         self.protocol = protocol
         self.ip = ip
         self.port = port
         self.inverters = {}
-        self.registerInfos = {}
-
+        self._inverterno_cache = {}  # Cache to speed up get_inverter_byinverterno lookups
+        super().__init__()
+        
     def add_inverter(self, inverter):
         self.inverters[inverter.inverterid] = inverter
+        # Update cache for O(1) lookup by inverterno
+        self._inverterno_cache[inverter.inverterno] = inverter
     
     def inverter_exists(self, inverterid):
         return inverterid in self.inverters
@@ -235,47 +276,25 @@ class loggerInfo:
         return self.inverters.get(inverterid, None) 
     
     def get_inverter_byinverterno(self, inverterno):
-        for inverterid, inverter in self.inverters.items():
-            logger.info(f"Checking inverter {inverterid} with number {inverter.inverterno} type  {type(inverter.inverterno)}  against {inverterno} type  {type(inverterno)} ")
-            if inverter.inverterno == inverterno: 
-                return inverter
-        return None
+        """
+        Optimized: Use cached lookup instead of O(n) scan.
+        Cache is populated when inverters are added.
+        """
+        return self._inverterno_cache.get(inverterno, None)
     
-    def getinverterno(self):
-        #return first inverter no
-        for inverterid, inverter in self.inverters.items():
+    def getinverterno(self, name=None):
+        if name and name in self.inverters:
+            inverter = self.get_inverter(name)
             return inverter.inverterno
-        return None
-    
-    def add_register(self, register_info):
-        self.registerInfos[register_info.regno] = register_info 
-    
-    def update_register(self, regno, value):
-        logger.info(f"Datalogger {self.dataloggerid}: Updating register {regno} with value {value}")
-        if regno in self.registerInfos:
-            self.registerInfos[regno].value = value
-            self.registerInfos[regno].retrievalDate = datetime.now()
         else:
-            self.registerInfos[regno] = registerInfo(regno, value)
- 
+            return '01' # Default deviceid for datalogger
+
     def update_inverter_register(self, inverterno, regno, value):
         inverter = self.get_inverter_byinverterno(inverterno)
         if inverter:
-            inverter.update_register(regno, value) 
-        logger.warning(f"Datalogger {self.dataloggerid}: did not find inverterno {inverterno} Updating inverter register {regno} with value {value} unsuccessful")
-    
-    def get_register_response(self, register):
-        if register in self.registerInfos:
-            return self.registerInfos[register]
+            inverter.update_register(regno, value)
         else:
-            return None
-    
-    def check_register_response(self, regno, startTimeStamp):
-        if regno in self.registerInfos:
-            reg_info = self.registerInfos[regno]
-            if reg_info.retrievalDate >= startTimeStamp:
-                return True
-        return False
+            logger.warning(f"Datalogger {self.dataloggerid}: did not find inverterno {inverterno} Updating inverter register {regno} with value {value} unsuccessful")
 
 class loggerRegistry: 
     def __init__(self):
@@ -365,26 +384,59 @@ class commandResponseDict:
 def getQueueName(datalogger):
     return datalogger.ip + "_" + str(datalogger.port)
 
+
+
+
 loggerreg = loggerRegistry()
 responses = commandResponseDict()
 
+class commandInfo:
+    def __init__(self, name, readCommand):
+        self.datalogger = loggerreg.get_datalogger(name)
+        self.inverter = loggerreg.get_inverter(name)
+        self.error = None
+        if name in loggerreg.loggers:
+            if readCommand:
+                self.sendcommand = CommandType.DataLoggerReadRegisters
+            else:
+                self.sendcommand = CommandType.DataLoggerWriteRegisters
+        elif name in loggerreg.inverters:
+            if readCommand:
+                self.sendcommand = CommandType.InverterReadRegisters
+            else:
+                self.sendcommand = CommandType.InverterWriteSingleRegister
+        else:
+            self.error = (f"Name {name} not found in logger or inverter registry")
 
-def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, value=None, startregister=None, endregister=None):
+def queueRegisterCommand(send_queuereg, cmdInfo, register=0, value=None, startregister=None, endregister=None):
     """
     Queue a register command (GET or PUT).
     
-    For GET commands (05, 19): reads register value
-    For PUT commands (06, 10, 18): writes value to register
+    For GET commands (InverterReadRegisters, DataLoggerReadRegisters): reads register value
+    For PUT commands (InverterWriteSingleRegister, InverterWriteMultiRegisters, DataLoggerWriteRegisters): writes value to register
     
     Args:
         send_queuereg: queue registry
         datalogger: datalogger info object
-        sendcommand: command type ('05', '06', '10', '18', '19')
+        sendcommand: command type (CommandType enum or string '05', '06', '10', '18', '19')
         register: register number (for single register commands)
         value: value to write (for write commands; None for read commands)
-        startregister: start register (for multiregister command '10')
-        endregister: end register (for multiregister command '10')
+        startregister: start register (for multiregister command)
+        endregister: end register (for multiregister command)
     """
+    # cmdInfo is expected to be an instance of commandInfo
+    if not cmdInfo or getattr(cmdInfo, 'error', None):
+        logger.warning("Invalid cmdInfo provided to queueRegisterCommand: %s", getattr(cmdInfo, 'error', None))
+        return None
+
+    sendcommand = cmdInfo.sendcommand
+    # Support both enum and string for backward compatibility
+    if isinstance(sendcommand, CommandType):
+        cmd_str = sendcommand.value
+    else:
+        cmd_str = sendcommand
+
+    datalogger = cmdInfo.datalogger
     protocol = datalogger.protocol
     loggerid = datalogger.dataloggerid
     sendseq = 1
@@ -397,20 +449,20 @@ def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, val
         body = body + "0000000000000000000000000000000000000000"
     
     # Handle different command types
-    if sendcommand == "10":
+    if cmd_str == CommandType.InverterWriteMultiRegisters.value:
         # Multiregister write (startregister, endregister, value)
         body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(int(endregister)) + value
-    elif sendcommand == "06":
+    elif cmd_str == CommandType.InverterWriteSingleRegister.value:
         # Inverter register write (register, value in hex format)
         value_hex = "{:04x}".format(int(value))
         body = body + "{:04x}".format(int(register)) + value_hex
-    elif sendcommand == "18":
+    elif cmd_str == CommandType.DataLoggerWriteRegisters.value:
         # Datalogger register write (register, value_length, value)
         value_hex = value.encode('ISO-8859-1').hex()
         valuelen = int(len(value_hex) / 2)
         body = body + "{:04x}".format(int(register)) + "{:04x}".format(valuelen) + value_hex
     else:
-        # Read commands (05, 19): register start and end are same
+        # Read commands (InverterReadRegisters, DataLoggerReadRegisters): register start and end are same
         body = body + "{:04x}".format(int(register)) + "{:04x}".format(int(register))
     
     # Calculate body length
@@ -418,12 +470,17 @@ def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, val
     
     # Determine device ID
     deviceid = "01"  # Default for datalogger
-    if sendcommand in ("05", "06", "10"):  # Inverter commands
-        deviceid = datalogger.getinverterno()
+    if cmd_str in (CommandType.InverterReadRegisters.value, CommandType.InverterWriteSingleRegister.value, CommandType.InverterWriteMultiRegisters.value):  # Inverter commands
+        # For inverter commands, prefer to use the inverter-specific number if available
+        try:
+            # cmdInfo.inverter may be an inverterInfo or None; loggerreg.get_datalogger returns loggerInfo
+            deviceid = datalogger.getinverterno()
+        except Exception:
+            deviceid = "01"
     
     logger.info(f"Selected deviceid: {deviceid} protocol: {protocol}")
     messageSeqNo = "{:04x}".format(sendseq)
-    header = messageSeqNo + "00" + protocol + "{:04x}".format(bodylen) + deviceid + sendcommand
+    header = messageSeqNo + "00" + protocol + "{:04x}".format(bodylen) + deviceid + cmd_str
     body = header + body
     body = bytes.fromhex(body)
     
@@ -439,29 +496,75 @@ def queueRegisterCommand(send_queuereg, datalogger, sendcommand, register=0, val
     # Queue the command
     qname = getQueueName(datalogger)
     send_queuereg[qname].put(body)
-    logger.info(f"{qname} - command queued, body {body} datalogger {loggerid} register {register} command {sendcommand}")
+    logger.info(f"{qname} - command queued, body {body} datalogger {loggerid} register {register} command {cmd_str}")
     return datetime.now()
 
    
 
-def getRegisterValue(startTimeStamp, datalogger, sendcommand, register):
-    if sendcommand == "05" :
+def getRegisterValue(startTimeStamp, cmdInfo, register):
+    # cmdInfo should contain datalogger and sendcommand
+    if not cmdInfo or getattr(cmdInfo, 'error', None):
+        logger.warning("Invalid cmdInfo provided to getRegisterValue: %s", getattr(cmdInfo, 'error', None))
+        return registerInfo(register, getattr(cmdInfo, 'error', 'Invalid cmdInfo'))
+
+    sendcommand = cmdInfo.sendcommand
+    if isinstance(sendcommand, CommandType):
+        cmd_str = sendcommand
+    else:
+        # allow raw string as fallback
+        cmd_str = sendcommand
+
+    datalogger = cmdInfo.datalogger
+
+    if cmd_str == CommandType.InverterReadRegisters:
         wait = round(conf.inverterrespwait/conf.apirespwait)
-    else :
+    else:
         wait = round(conf.dataloggerrespwait/conf.apirespwait)
 
     logging.info(f"Waiting for command response: {wait} cycles of {conf.apirespwait} seconds each")
     register = int(register)
     for x in range(wait):
         logging.info(f"Waiting for command response, cycle {x+1} of {wait}")
+        inverter = cmdInfo.inverter
+        if inverter:
+            # Use optimized get_register_response_if_valid to avoid double lookup
+            reg_info = inverter.get_register_response_if_valid(register, startTimeStamp)
+            if reg_info:
+                return reg_info
+
+        # Check datalogger (also optimized)
+        reg_info = datalogger.get_register_response_if_valid(register, startTimeStamp)
+        if reg_info:
+            return reg_info
         
-        if datalogger.check_register_response(register, startTimeStamp):
-            return datalogger.get_register_response(register)
-        else:
-                #Set retry waiting cycle time loop for datalogger or inverter
-            time.sleep(conf.apirespwait)
+        # Set retry waiting cycle time loop for datalogger or inverter
+        time.sleep(conf.apirespwait)
+    
     logging.warning("No valid response received within the wait time")
     return registerInfo(register, "No valid response received")
+
+# Unified function for queueing a register command and getting the response
+def queueAndGetRegisterValue(send_queuereg, name, readCommand, register=None, startregister=None, endregister=None, value=None):
+    """
+    Queue a register command (read or write) and wait for the response.
+    Args:       send_queuereg: queue registry  
+        name: datalogger name or inverter id
+        readCommand: True for read, False for write
+        startregister: register number (for single register commands) or start register (for multiregister command)
+        value: value to write (for write commands; None for read commands)
+        endregister: end register (for multiregister command; None for single register commands)
+    """
+      
+    # normalize register parameter name
+    if startregister is None and register is not None:
+        startregister = register
+
+    cmdInfo = commandInfo(name, readCommand)
+    if cmdInfo.error:
+        return registerInfo(startregister, cmdInfo.error)
+    startTimeStamp = queueRegisterCommand(send_queuereg, cmdInfo, register=startregister, value=value, startregister=startregister, endregister=endregister)
+    returnVal = getRegisterValue(startTimeStamp, cmdInfo, startregister)
+    return returnVal
 
 
 class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -574,7 +677,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                     # test if datalogger  and / or inverter id is specified.
                     try:
-                        if sendcommand == "05" :
+                        if sendcommand == CommandType.InverterReadRegisters.value:
                             try:
                                 #test if inverter id is specified and get loggerid
                                 inverterid = urlquery["inverter"][0]
@@ -602,7 +705,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 # no set default format op dec.
                                 formatval = "dec"
 
-                        elif sendcommand == "19" :
+                        elif sendcommand == CommandType.DataLoggerReadRegisters.value:
                             # if read datalogger info.
                             try:
                                 # Verify dataloggerid is specified
@@ -700,19 +803,19 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                 #wait for response
                 #Set #retry waiting loop for datalogger or inverter
-                if sendcommand == "05" :
+                if sendcommand == CommandType.InverterReadRegisters.value:
                    wait = round(self.conf.inverterrespwait/self.conf.apirespwait)
                    #if verbose: print("\t - Grotthttpserver - wait Cycles:", wait )
                 else :
-                    wait = round(self.conf.dataloggerrespwait/self.conf.apirespwait)
-                    #if verbose: print("\t - Grotthttpserver - wait Cycles:", wait )
+                   wait = round(self.conf.dataloggerrespwait/self.conf.apirespwait)
+                   #if verbose: print("\t - Grotthttpserver - wait Cycles:", wait )
 
                 for x in range(wait):
                     if verbose: print("\t - Grotthttpserver - wait for GET response")
                     try:
                         comresp = commandresponse[sendcommand][regkey]
 
-                        if sendcommand == "05" :
+                        if sendcommand == CommandType.InverterReadRegisters.value:
                             if formatval == "dec" :
                                 comresp["value"] = int(comresp["value"],16)
                             elif formatval == "text" :
@@ -814,7 +917,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                     # test if datalogger  and / or inverter id is specified.
                     try:
-                        if sendcommand == "06" :
+                        if sendcommand == CommandType.InverterWriteSingleRegister.value:
                             try:
                                 #test if inverter id is specified and get loggerid
                                 inverterid = urlquery["inverter"][0]
@@ -828,7 +931,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 htmlsendresp(self,responserc,responseheader,responsetxt)
                                 return
 
-                        if sendcommand == "18" :
+                        if sendcommand == CommandType.DataLoggerWriteRegisters.value:
                             # if read datalogger info.
                             try:
                                 # Verify dataloggerid is specified
@@ -923,7 +1026,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                     elif command == "datetime" :
                         #process set datetime, only allowed for datalogger!!!
-                        if sendcommand == "06" :
+                        if sendcommand == CommandType.InverterWriteSingleRegister.value:
                             responsetxt = b'datetime command not allowed for inverter'
                             responserc = 400
                             responseheader = "text/body"
@@ -942,7 +1045,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         return
 
                     #test value:
-                    if sendcommand == "06" :
+                    if sendcommand == CommandType.InverterWriteSingleRegister.value:
                         try:
                             # is format keyword specified? (dec, text, hex)
                             formatval = urlquery["format"][0]
@@ -983,11 +1086,11 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 if datalogger.protocol == "06" :
                     body = body + "0000000000000000000000000000000000000000"
 
-                if sendcommand == "06" :
+                if sendcommand == CommandType.InverterWriteSingleRegister.value:
                     value = "{:04x}".format(value)
                     valuelen = ""
 
-                elif sendcommand == "10" :
+                elif sendcommand == CommandType.InverterWriteMultiRegisters.value:
                     # Value is already in hex format
                     pass
 
@@ -996,7 +1099,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     valuelen = int(len(value)/2)
                     valuelen = "{:04x}".format(valuelen)
 
-                if sendcommand == "10" :
+                if sendcommand == CommandType.InverterWriteMultiRegisters.value:
                     body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(int(endregister)) + value
 
                 else :
@@ -1007,7 +1110,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 #device id for datalogger is by default "01" for inverter deviceid is inverterid!
                 deviceid = "01"
                 # test if it is inverter command and set deviceid
-                if sendcommand in ("06","10") :
+                if sendcommand in (CommandType.InverterWriteSingleRegister.value, CommandType.InverterWriteMultiRegisters.value):
                     deviceid = loggerreg[dataloggerid].getinverterno()
                 print("\t - Grotthttpserver: selected deviceid :", deviceid)
 
@@ -1031,14 +1134,14 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 logger.info(f"{qname} - put command created, body {body}")
                 self.send_queuereg[qname].put(body)
                 responseno = "{:04x}".format(sendseq)
-                if sendcommand == "10":
+                if sendcommand == CommandType.InverterWriteMultiRegisters.value:
                     regkey = "{:04x}".format(int(startregister)) + "{:04x}".format(int(endregister))
                 else :
                     regkey = "{:04x}".format(int(register))
 
                 try:
                     #delete response: be aware a 18 command give 19 response, 06 send command gives 06 response in different format!
-                    if sendcommand == "18" :
+                    if sendcommand == CommandType.DataLoggerWriteRegisters.value:
                         del commandresponse[sendcommand][regkey]
                     else:
                         del commandresponse[sendcommand][regkey]
@@ -1047,7 +1150,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                 #wait for response
                 #Set #retry waiting loop for datalogger or inverter
-                if sendcommand == "06" :
+                if sendcommand == CommandType.InverterWriteSingleRegister.value:
                    wait = round(self.conf.inverterrespwait/self.conf.apirespwait)
                    #if verbose: print("\t - Grotthttpserver - wait Cycles:", wait )
                 else :
@@ -1058,8 +1161,8 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     if verbose: print("\t - Grotthttpserver - wait for PUT response")
                     try:
                         #read response: be aware a 18 command give 19 response, 06 send command gives 06 response in differnt format!
-                        if sendcommand == "18" :
-                            comresp = commandresponse["18"][regkey]
+                        if sendcommand == CommandType.DataLoggerWriteRegisters.value:
+                            comresp = commandresponse[CommandType.DataLoggerWriteRegisters.value][regkey]
                         else:
                             comresp = commandresponse[sendcommand][regkey]
                         if verbose: print("\t - " + "Grotthttperver - Commandresponse ", responseno, register, commandresponse[sendcommand][regkey])
@@ -1603,11 +1706,11 @@ class sendrecvserver:
                     # create response
                     response = headerackx + crc16.to_bytes(2, "big")
                 
-                logger.debug(f"Response: {format_multi_line("\t\t", response)}")
+                logger.debug(f"Response: {format_multi_line('\t\t', response)}")
 
                 loggerreg.update_logger(recInfo.loggerid, ip = client_address, port = client_port, protocol = recInfo.protocol  )   
                 recInfo.setInverterID()
-                loggerreg.add_inverter(recInfo.loggerid,recInfo.inverterid,recInfo.deviceid)
+                loggerreg.add_inverter(recInfo.loggerid, recInfo.inverterid, recInfo.deviceid)
 
                 if conf.mode=="server" :
                     procdatarc = self.process_data_record(conf,recInfo)
@@ -1708,7 +1811,6 @@ class sendrecvserver:
                 self.send_queuereg[qname].put(response)
         except Exception as e:
             print("\t - Grottserver - exception in main server thread occured : ", e)
-
 
 def set_menu(section):
     
@@ -1830,35 +1932,16 @@ class FlaskServer():
             form = RegisterValueForm()
             self.server.fillTargetChoices(form.targetSelect.choices)
             if form.validate_on_submit():
+                name = form.targetSelect.data
                 if form.getValue.data:
                     # Get the current value of the register
-                    name = form.targetSelect.data
-                    logger.info(f"Form submitted with target: {name}, start: {form.start.data}, end: {form.end.data}")
-                    if name in loggerreg.loggers:
-                        sendcommand = '19'
-                    else :
-                        sendcommand = '05'
-                    datalogger = loggerreg.get_datalogger(name)
-                    startTimeStamp = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data)
-                    regInfo = getRegisterValue(startTimeStamp, datalogger, sendcommand, form.start.data)
+                    regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=True, register=form.start.data, endregister=form.end.data)
                     form.value.data = regInfo.value
-                    if sendcommand == '05' :
-                        logger.info(f"Register value retrieved for inverter {name} register {form.start.data} : {regInfo.value}")
-                    else :
-                        logger.info(f"Register value retrieved for datalogger {name} register {form.start.data} : {regInfo.value}")
+                    logger.info(f"Register value retrieved for datalogger or inverter {name} register {form.start.data} : {regInfo.value}")
                 elif form.setValue.data:
                     # Set the value of the register
-                    name = form.targetSelect.data
                     logger.info(f"Form submitted to set value with target: {name}, start: {form.start.data}, end: {form.end.data}, value: {form.value.data}")
-                    if name in loggerreg.loggers:
-                        sendcommand = '18'
-                    else :
-                        sendcommand = '06'
-                    datalogger = loggerreg.get_datalogger(name)
-                    startTimeStamp = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=form.start.data, value=form.value.data)
-                    regInfo = getRegisterValue(startTimeStamp, datalogger, sendcommand, form.start.data)
-                # Process the form data (e.g., save to database)
-                
+                    regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=False, register=form.start.data, value=form.value.data)
             return render_template('register.html', mc=set_menu('register'), loggerreg=loggerreg, form=form)
 
     class RegisterOverview(MethodView):
@@ -1911,20 +1994,9 @@ class FlaskServer():
             target = request.args.get('target', default='', type=str)
             name = request.args.get('name', default='', type=str)
 
-            datalogger = loggerreg.get_datalogger(name)
-            if datalogger:
-                if target.lower() == 'inverter':
-                    sendcommand = '05'
-                else:
-                    sendcommand = '19'
-                # Use the new queueRegisterCommand/getRegisterValue flow
-                startTimeStamp = queueRegisterCommand(self.server.send_queuereg, datalogger, sendcommand, register=register_start)
-                regInfo = getRegisterValue(startTimeStamp, datalogger, sendcommand, register_start)
-                return jsonify({'value': regInfo.value})
-            else:
-                value = "Datalogger not found"
-                return jsonify({'value': value})
-
+            regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=True, register=register_start)
+            return jsonify({'value': regInfo.value})
+            
     # --- Ported handlers from GrottHttpRequestHandler for backward compatibility ---
     def _info(self):
         # emulate original info endpoint
@@ -1956,10 +2028,10 @@ class FlaskServer():
             if request.method == 'GET':
                 # map to original logic for GET
                 if is_datalogger:
-                    sendcommand = '19'
+                    sendcommand = CommandType.DataLoggerReadRegisters
                     logger.debug("FlaskServer - datalogger GET received: %s", request.args)
                 else:
-                    sendcommand = '05'
+                    sendcommand = CommandType.InverterReadRegisters
                     logger.debug("FlaskServer - inverter GET received: %s", request.args)
 
                 if not request.args:
@@ -1977,7 +2049,7 @@ class FlaskServer():
 
                 # get datalogger/inverter target
                 datalogger = None
-                if sendcommand == '05':
+                if sendcommand == CommandType.InverterReadRegisters:
                     inverterid = request.args.get('inverter')
                     if inverterid:
                         datalogger = loggerreg.find_datalogger_by_inverter(inverterid)
@@ -1988,12 +2060,13 @@ class FlaskServer():
                         return make_response(b'invalid format specified', 400)
                 else:
                     try:
-                        datalogger = loggerreg[request.args.get('datalogger')]
+                        dataloggerid = request.args.get('datalogger')
+                        datalogger = loggerreg[dataloggerid]
                     except Exception:
                         return make_response(b'invalid datalogger id', 400)
 
                 if command == 'regall':
-                    comresp = commandresponse[sendcommand]
+                    comresp = commandresponse[sendcommand.value]
                     return make_response(json.dumps(comresp).encode('ISO-8859-1'), 200)
 
                 # command == 'register' - use new queue-based flow
@@ -2005,12 +2078,15 @@ class FlaskServer():
                     return make_response(b'invalid reg value specified', 400)
 
                 try:
-                    # Use new queueRegisterCommand and getRegisterValue flow
-                    startTimeStamp = queueRegisterCommand(self.send_queuereg, datalogger, sendcommand, register=int(register))
-                    regInfo = getRegisterValue(startTimeStamp, datalogger, sendcommand, int(register))
+                    # Use new queueAndGetRegisterValue flow
+                    if is_datalogger:
+                        name_for_cmd = datalogger.dataloggerid
+                    else:
+                        name_for_cmd = inverterid
+                    regInfo = queueAndGetRegisterValue(self.send_queuereg, name_for_cmd, readCommand=True, register=int(register))
                     
                     # Format value if needed
-                    if sendcommand == '05':
+                    if sendcommand == CommandType.InverterReadRegisters:
                         if formatval == 'dec':
                             regInfo.value = int(regInfo.value, 16)
                         elif formatval == 'text':
@@ -2025,10 +2101,10 @@ class FlaskServer():
             elif request.method == 'PUT':
                 # Ported PUT logic using new queue-based flow
                 if is_datalogger:
-                    sendcommand = '18'
+                    sendcommand = CommandType.DataLoggerWriteRegisters
                     logger.debug("FlaskServer - datalogger PUT received: %s", request.args)
                 else:
-                    sendcommand = '06'
+                    sendcommand = CommandType.InverterWriteSingleRegister
                     logger.debug("FlaskServer - inverter PUT received: %s", request.args)
 
                 command = request.args.get('command')
@@ -2037,7 +2113,7 @@ class FlaskServer():
 
                 # find datalogger
                 datalogger = None
-                if sendcommand == '06':
+                if sendcommand == CommandType.InverterWriteSingleRegister:
                     inverterid = request.args.get('inverter')
                     if inverterid:
                         datalogger = loggerreg.find_datalogger_by_inverter(inverterid)
@@ -2065,7 +2141,7 @@ class FlaskServer():
                             return make_response(b'no value specified', 400)
                         
                         # Convert value format for inverter command if needed
-                        if sendcommand == '06':
+                        if sendcommand == CommandType.InverterWriteSingleRegister:
                             if formatval == 'dec':
                                 value = int(value)
                             elif formatval == 'text':
@@ -2078,7 +2154,13 @@ class FlaskServer():
                             value = int(value)
                         
                         # Use new queue-based flow for single register write
-                        queueRegisterCommand(self.send_queuereg, datalogger, sendcommand, register=int(register), value=value)
+                        # build commandInfo for this target
+                        if is_datalogger:
+                            name_for_cmd = datalogger.dataloggerid
+                        else:
+                            name_for_cmd = inverterid
+                        cmdInfo = commandInfo(name_for_cmd, False)
+                        queueRegisterCommand(self.send_queuereg, cmdInfo, register=int(register), value=value)
                         return make_response(b'OK', 200)
                     
                     elif command == 'multiregister':
@@ -2092,16 +2174,26 @@ class FlaskServer():
                             return make_response(b'no value specified', 400)
                         
                         # Use new queue-based flow for multiregister write
-                        queueRegisterCommand(self.send_queuereg, datalogger, '10', 
+                        if is_datalogger:
+                            name_for_cmd = datalogger.dataloggerid
+                        else:
+                            name_for_cmd = inverterid
+                        cmdInfo = commandInfo(name_for_cmd, False)
+                        queueRegisterCommand(self.send_queuereg, cmdInfo, 
                                            startregister=startregister, endregister=endregister, value=value)
                         return make_response(b'OK', 200)
                     
                     elif command == 'datetime':
-                        if sendcommand == '06':
+                        if sendcommand == CommandType.InverterWriteSingleRegister:
                             return make_response(b'datetime command not allowed for inverter', 400)
                         
                         # Use new queue-based flow for datetime write
-                        queueRegisterCommand(self.send_queuereg, datalogger, sendcommand, register=31, value=str(datetime.now().replace(microsecond=0)))
+                        if is_datalogger:
+                            name_for_cmd = datalogger.dataloggerid
+                        else:
+                            name_for_cmd = inverterid
+                        cmdInfo = commandInfo(name_for_cmd, False)
+                        queueRegisterCommand(self.send_queuereg, cmdInfo, register=31, value=str(datetime.now().replace(microsecond=0)))
                         return make_response(b'OK', 200)
                     
                     else:
