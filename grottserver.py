@@ -1596,10 +1596,9 @@ class Server :
 
         # GrottHttpServer replaced by FlaskServer
         # http_server = GrottHttpServer(conf, conf.serverip, conf.httpport, send_queuereg)
-        flask_server = FlaskServer(conf, "0.0.0.0", 5000, send_queuereg)
+        flask_server = FlaskServer(conf, conf.serverip, conf.httpport, send_queuereg)
         #connection_server = sendrecvserver(conf.serverip, conf.serverport, send_queuereg)
-        connection_server = sendrecvserver(conf,"0.0.0.0", conf.serverport, send_queuereg)
-        httpname = "httpserver_" + conf.serverip + ":" + str(conf.httpport)
+        connection_server = sendrecvserver(conf, conf.serverip, conf.serverport, send_queuereg)
         servername = "conserver_" + conf.serverip + ":" + str(conf.serverport)
         def start_background_servers():
             connection_server_thread = threading.Thread(target=connection_server.run, name=servername, args=[conf])
