@@ -279,8 +279,20 @@ class loggerInfo(allRegistersInfo):
         """
         Optimized: Use cached lookup instead of O(n) scan.
         Cache is populated when inverters are added.
+        Falls back to scan if cache lookup fails (for robustness).
         """
-        return self._inverterno_cache.get(inverterno, None)
+        # Try cache first
+        if inverterno in self._inverterno_cache:
+            return self._inverterno_cache[inverterno]
+        
+        # Fallback: scan and rebuild cache (shouldn't normally happen, but handles edge cases)
+        logger.debug(f"Cache miss for inverterno {inverterno}, rebuilding from inverters dict")
+        for inverterid, inverter in self.inverters.items():
+            if inverter.inverterno == inverterno:
+                # Add to cache for next time
+                self._inverterno_cache[inverterno] = inverter
+                return inverter
+        return None
     
     def getinverterno(self, name=None):
         if name and name in self.inverters:
@@ -324,6 +336,8 @@ class loggerRegistry:
             logger.info(f"Adding inverter: {inverterid} with number {inverterno} to registry")
             inverter = inverterInfo(inverterid, dataloggerid, inverterno)
             self.inverters[inverterid] = inverter
+        else:
+            inverter = self.inverters[inverterid]
         if dataloggerid in self.loggers and not self.loggers[dataloggerid].inverter_exists(inverterid):
             logger.info(f"Adding inverter: {inverterid} with number {inverterno} to logger {dataloggerid}")
             self.loggers[dataloggerid].add_inverter(inverter)
