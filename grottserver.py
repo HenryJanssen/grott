@@ -368,6 +368,12 @@ class loggerRegistry:
             return self.find_datalogger_by_inverter(name)
         return None
 
+    def get_inverter(self, name):
+        """Get an inverter by inverter ID from the registry"""
+        if name in self.inverters:
+            return self.inverters[name]
+        return None
+
     def update_datalogger_register_response(self, dataloggerid, regno, value):
         datalogger = self.get_datalogger(dataloggerid)
         if datalogger:
