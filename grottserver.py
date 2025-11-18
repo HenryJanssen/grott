@@ -26,8 +26,6 @@ logger = logging.getLogger(__name__)
 # Version:
 vrmserver = "3.2.1_20250608"
 
-commandresponse =  defaultdict(dict)
-
 # Declare Variables (to be moved to config file later)
 #serverhost = "0.0.0.0"
 #serverport = 5781
@@ -191,12 +189,6 @@ def createtimecommand(self, protocol,deviceid,loggerid,sequenceno) :
             body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
 
         logger.debug(f'Time command created  : {format_multi_line("  ",body)}')
-
-        #just to be sure delete register info
-        try:
-            del commandresponse["18"]["001f"]
-        except:
-            pass
 
         return(body)
 
@@ -387,28 +379,11 @@ class loggerRegistry:
             datalogger.update_inverter_register(inverterno, regno, value)
         else:
             logger.warning(f"Datalogger ID {dataloggerid} not found. Cannot update inverter {inverterno} register {regno}.")
-    
-class commandResponseDict:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.commands = defaultdict()
-
-    def set(self, key, value):
-        with self.lock:
-            self.commands[key] = value
-
-    def get(self, key):
-        with self.lock:
-            return self.commands.get(key)
 
 def getQueueName(datalogger):
     return datalogger.ip + "_" + str(datalogger.port)
 
-
-
-
 loggerreg = loggerRegistry()
-responses = commandResponseDict()
 
 class commandInfo:
     def __init__(self, name, readCommand):
@@ -1133,18 +1108,12 @@ class sendrecvserver:
                 
                 logger.info(f'Register {register} info regkey {regkey} : {responseInfo.value} recordInfo: {recInfo.infoStr()}')
                 if recInfo.rectype == "06" :
-                    # command 06 response has ack (result) + value. We will create a 06 response and a 05 response (for reg administration)
-                    commandresponse["06"][regkey] = {"value" : value , "result" : result}
-                    commandresponse["05"][regkey] = {"value" : value}
                     loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.deviceid, register, value)
                 elif recInfo.rectype == "18" :
-                    commandresponse["18"][regkey] = {"result" : result}
                     loggerreg.update_datalogger_register_response(recInfo.loggerid, register, value)
                 elif recInfo.rectype == "19" :
-                    commandresponse[recInfo.rectype][regkey] = {"value" : value}
                     loggerreg.update_datalogger_register_response(recInfo.loggerid, register, value)
                 else :
-                    commandresponse[recInfo.rectype][regkey] = {"value" : value}
                     loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.deviceid, register, value)
 
 
@@ -1158,7 +1127,7 @@ class sendrecvserver:
                 value = recInfo.decryptedData[84:86]
 
                 regkey = "{:04x}".format(startregister) + "{:04x}".format(endregister)
-                commandresponse[recInfo.rectype][regkey] = {"value" : value}
+                loggerreg.update_inverter_register_response(recInfo.loggerid, recInfo.deviceid, regkey, value)
 
                 response = None
 
@@ -1202,12 +1171,27 @@ def testFlaskCreateDummyData():
     loggerreg.add_inverter("DLG002","INV003","01")
 
 
-from flask import Flask, request, jsonify, render_template, make_response
+from flask import Flask, request, jsonify, render_template, make_response, redirect, url_for
 from flask.views import MethodView
 from flask_wtf import FlaskForm
-from wtforms import StringField, SubmitField, SelectField
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from wtforms import StringField, SubmitField, SelectField, PasswordField
 from wtforms.validators import DataRequired, Length
+from werkzeug.security import generate_password_hash, check_password_hash
 import platform
+
+class User(UserMixin):
+    """User class for Flask-Login"""
+    def __init__(self, id, username, password_hash):
+        self.id = id
+        self.username = username
+        self.password_hash = password_hash
+
+class LoginForm(FlaskForm):
+    """Login form with username and password"""
+    username = StringField('Username', validators=[DataRequired(), Length(min=3, max=64)])
+    password = PasswordField('Password', validators=[DataRequired(), Length(min=1, max=128)])
+    submit = SubmitField('Login')
 
 class RegisterValueForm(FlaskForm):
     targetSelect = SelectField('Target (inverter/datalogger)', choices=[], validators=[DataRequired()])
@@ -1233,6 +1217,27 @@ class FlaskServer():
         self.httpport = httpport    
         self.send_queuereg = send_queuereg
         self.conf = conf
+        
+        # Initialize Flask-Login
+        self.login_manager = LoginManager()
+        self.login_manager.init_app(self.app)
+        self.login_manager.login_view = 'login'
+        self.login_manager.login_message = 'Please log in to access this page.'
+        
+        # In-memory user store (can be extended with database)
+        # Default credentials: username=admin, password=admin
+        self.users = {
+            '1': User('1', 'admin', generate_password_hash('admin'))
+        }
+        
+        # Load user callback
+        @self.login_manager.user_loader
+        def load_user(user_id):
+            return self.users.get(user_id)
+        
+        # Register routes
+        self.app.add_url_rule('/login', view_func=self.Login.as_view('login', server=self))
+        self.app.add_url_rule('/logout', view_func=self.Logout.as_view('logout', server=self))
         self.app.add_url_rule('/', view_func=self.Home.as_view('home', server=self))
         self.app.add_url_rule('/registerOverview', view_func=self.RegisterOverview.as_view('registerOverview', server=self))
         self.app.add_url_rule('/register', view_func=self.Register.as_view('register', server=self))
@@ -1243,6 +1248,31 @@ class FlaskServer():
         # datalogger and inverter endpoints accept both GET and PUT similar to GrottHttpServer
         self.app.add_url_rule('/datalogger', view_func=self._datainv, methods=['GET','PUT'])
         self.app.add_url_rule('/inverter', view_func=self._datainv, methods=['GET','PUT'])
+
+        # Ensure templates always receive `mc` (menu config) via a context processor.
+        @self.app.context_processor
+        def inject_mc():
+            # Try to derive a logical section name from the endpoint or path.
+            section = ''
+            try:
+                endpoint = request.endpoint or ''
+            except Exception:
+                endpoint = ''
+
+            # Map endpoints to menu sections used by set_menu()
+            endpoint_map = {
+                'home': 'home',
+                'registerOverview': 'registerOverview',
+                'register': 'register',
+            }
+
+            section = endpoint_map.get(endpoint, '')
+
+            # Provide `mc` to templates and keep compatibility if set_menu raises
+            try:
+                return {'mc': set_menu(section)}
+            except Exception:
+                return {'mc': {}}
 
     def run(self):
         if conf.waitressServer:
@@ -1280,6 +1310,50 @@ class FlaskServer():
             self.server = Server(self.conf)  # Store server instance
             GunicornApp(self.app, options).run()
     
+    class Login(MethodView):
+        def __init__(self, server):
+            self.server = server
+        
+        def get(self):
+            if current_user.is_authenticated:
+                return redirect(url_for('home'))
+            form = LoginForm()
+            return render_template('login.html', form=form)
+        
+        def post(self):
+            form = LoginForm()
+            if form.validate_on_submit():
+                username = form.username.data
+                password = form.password.data
+                
+                # Check credentials
+                user = None
+                for uid, u in self.server.users.items():
+                    if u.username == username and check_password_hash(u.password_hash, password):
+                        user = u
+                        break
+                
+                if user:
+                    login_user(user, remember=True)
+                    logger.info(f"User {username} logged in successfully")
+                    next_page = request.args.get('next')
+                    return redirect(next_page) if next_page else redirect(url_for('home'))
+                else:
+                    logger.warning(f"Failed login attempt for username: {username}")
+                    form.errors['login'] = ['Invalid username or password']
+            
+            return render_template('login.html', form=form)
+    
+    class Logout(MethodView):
+        def __init__(self, server):
+            self.server = server
+
+        def get(self):
+            username = current_user.username if current_user.is_authenticated else 'Unknown'
+            logout_user()
+            logger.info(f"User {username} logged out")
+            return redirect(url_for('login'))
+    
     def fillTargetChoices(self, choices):
         dataloggers = loggerreg.loggers.values()
         for datalogger in dataloggers:
@@ -1293,11 +1367,13 @@ class FlaskServer():
             self.server = server
 #            testFlaskCreateDummyData()
 
+        @login_required
         def get(self):
             form = RegisterValueForm()
             self.server.fillTargetChoices(form.targetSelect.choices)
             return render_template('register.html',  mc=set_menu('register'), loggerreg=loggerreg, form=form)
 
+        @login_required
         def post(self):
             form = RegisterValueForm()
             self.server.fillTargetChoices(form.targetSelect.choices)
@@ -1318,6 +1394,7 @@ class FlaskServer():
         def __init__(self, server):
             self.server = server
 
+        @login_required
         def get(self):
             return render_template('registerOverview.html',  mc=set_menu('registerOverview'), loggerreg=loggerreg)
 
@@ -1331,6 +1408,7 @@ class FlaskServer():
         def __init__(self, server):
             self.server = server
 
+        @login_required
         def get(self):
             queueinfo = []
             for key, value in self.server.send_queuereg.items():
@@ -1340,8 +1418,9 @@ class FlaskServer():
             return render_template('home.html', mc=set_menu('home'), threadCount = threading.active_count(),
                                    memory=psutil.Process(os.getpid()).memory_info().rss/1024**2, 
                                    activeThreads=threading.enumerate(), current_level=current_level,
-                                   queueinfo=queueinfo, loggerreg=loggerreg, commandresponse=commandresponse)
+                                   queueinfo=queueinfo, loggerreg=loggerreg)
         
+        @login_required
         def post(self):
             # Get the selected log level from the form
             action = request.form.get('action')
@@ -1436,7 +1515,17 @@ class FlaskServer():
                         return make_response(b'invalid datalogger id', 400)
 
                 if command == 'regall':
-                    comresp = commandresponse[sendcommand.value]
+                    # return all register values for this target
+                    comresp = {}
+                    if is_datalogger:
+                        for regkey, reginfo in datalogger.registers.items():
+                            comresp[regkey] = reginfo.value
+                    else:
+                        inverter = datalogger.inverters.get(inverterid)
+                        if not inverter:
+                            return make_response(b'invalid inverter id', 400)
+                        for regkey, reginfo in inverter.registers.items():
+                            comresp[regkey] = reginfo.value
                     return make_response(json.dumps(comresp).encode('ISO-8859-1'), 200)
 
                 # command == 'register' - use new queue-based flow
@@ -1591,8 +1680,6 @@ class Server :
         logger.info("Grott server started")
         logger.info("mode: %s",conf.mode)
         send_queuereg = {}
-        # response from command is written is this variable (for now flat, maybe dict later)
-        #commandresponse =  defaultdict(dict)
 
         # GrottHttpServer replaced by FlaskServer
         # http_server = GrottHttpServer(conf, conf.serverip, conf.httpport, send_queuereg)
