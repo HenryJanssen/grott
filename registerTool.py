@@ -235,7 +235,7 @@ def export_all_registers(output_dir="registers_export", format_type="both"):
                 print(f"⚠ Skipping XLSX export - openpyxl not installed")
 
 
-def import_all_registers(input_dir="registers_export", format_type="json"):
+def import_all_registers(input_dir="registers", format_type="json"):
     """
     Import all register tables from files by walking the directory
     
@@ -268,17 +268,62 @@ def import_all_registers(input_dir="registers_export", format_type="json"):
     return tables
 
 
+def convert_registers(input_dir, input_format, output_dir, output_format):
+    """
+    Convert register tables between JSON and XLSX formats
+    
+    Args:
+        input_dir: Directory containing source files
+        input_format: 'json' or 'xlsx'
+        output_dir: Directory to save converted files
+        output_format: 'json' or 'xlsx'
+    """
+    if input_format == output_format:
+        print(f"⚠ Input and output formats are the same ({input_format})")
+        return
+    
+    # Import from source format
+    print(f"Reading {input_format.upper()} files from '{input_dir}'...")
+    tables = import_all_registers(input_dir, input_format)
+    
+    if not tables:
+        print(f"✗ No registers imported from '{input_dir}'")
+        return
+    
+    # Export to target format
+    print(f"Converting to {output_format.upper()} and saving to '{output_dir}'...")
+    Path(output_dir).mkdir(exist_ok=True)
+    exporter = RegisterExporter()
+    
+    for table_name, table_data in tables.items():
+        if output_format == "json":
+            json_file = os.path.join(output_dir, f"{table_name}.json")
+            exporter.export_to_json(table_data, json_file)
+        else:
+            if XLSX_AVAILABLE:
+                xlsx_file = os.path.join(output_dir, f"{table_name}.xlsx")
+                exporter.export_to_xlsx(table_data, xlsx_file)
+            else:
+                print(f"✗ openpyxl not installed - cannot export to XLSX")
+                return
+    
+    print(f"\n✓ Successfully converted {len(tables)} register tables from {input_format.upper()} to {output_format.upper()}")
+
+
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("Register Tool - Export/Import utility")
+        print("Register Tool - Export/Import/Convert utility")
         print("\nUsage:")
         print("  python registerTool.py export [json|xlsx|both] [output_dir]")
         print("  python registerTool.py import [json|xlsx] [input_dir]")
+        print("  python registerTool.py convert <input_format> <output_format> [input_dir] [output_dir]")
         print("\nExamples:")
         print("  python registerTool.py export both ./exports")
         print("  python registerTool.py import json ./exports")
+        print("  python registerTool.py convert json xlsx ./json_files ./xlsx_files")
+        print("  python registerTool.py convert xlsx json ./xlsx_files ./json_files")
         sys.exit(1)
     
     command = sys.argv[1]
@@ -297,7 +342,25 @@ if __name__ == "__main__":
         for name, data in tables.items():
             print(f"  - {name}: {len(data)} registers")
     
+    elif command == "convert":
+        if len(sys.argv) < 4:
+            print("✗ Convert requires input and output formats")
+            print("Usage: python registerTool.py convert <input_format> <output_format> [input_dir] [output_dir]")
+            sys.exit(1)
+        
+        input_fmt = sys.argv[2].lower()
+        output_fmt = sys.argv[3].lower()
+        input_dir = sys.argv[4] if len(sys.argv) > 4 else "registers_export"
+        output_dir = sys.argv[5] if len(sys.argv) > 5 else f"registers_convert_{output_fmt}"
+        
+        if input_fmt not in ("json", "xlsx") or output_fmt not in ("json", "xlsx"):
+            print("✗ Format must be 'json' or 'xlsx'")
+            sys.exit(1)
+        
+        convert_registers(input_dir, input_fmt, output_dir, output_fmt)
+    
     else:
         print(f"Unknown command: {command}")
+        print("\nAvailable commands: export, import, convert")
         sys.exit(1) 
 
