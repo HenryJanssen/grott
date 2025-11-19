@@ -491,7 +491,7 @@ def queueRegisterCommand(send_queuereg, cmdInfo, startregister=None, endregister
     # Queue the command
     qname = getQueueName(datalogger)
     send_queuereg[qname].put(body)
-    logger.info(f"{qname} - command queued, body {body} datalogger {loggerid} register {register} command {cmd_str}")
+    logger.info(f"{qname} - command queued, body {body} datalogger {loggerid} startregister {startregister} endregister {endregister} command {cmd_str}")
     return datetime.now()
 
    
