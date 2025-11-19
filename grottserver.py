@@ -403,7 +403,7 @@ class commandInfo:
         else:
             self.error = (f"Name {name} not found in logger or inverter registry")
 
-def queueRegisterCommand(send_queuereg, cmdInfo, register=0, value=None, startregister=None, endregister=None):
+def queueRegisterCommand(send_queuereg, cmdInfo, startregister=None, endregister=None, value=None):
     """
     Queue a register command (GET or PUT).
     
@@ -450,15 +450,15 @@ def queueRegisterCommand(send_queuereg, cmdInfo, register=0, value=None, startre
     elif cmd_str == CommandType.InverterWriteSingleRegister.value:
         # Inverter register write (register, value in hex format)
         value_hex = "{:04x}".format(int(value))
-        body = body + "{:04x}".format(int(register)) + value_hex
+        body = body + "{:04x}".format(int(startregister)) + value_hex
     elif cmd_str == CommandType.DataLoggerWriteRegisters.value:
-        # Datalogger register write (register, value_length, value)
+        # Datalogger register write (startregister, value_length, value)
         value_hex = value.encode('ISO-8859-1').hex()
         valuelen = int(len(value_hex) / 2)
-        body = body + "{:04x}".format(int(register)) + "{:04x}".format(valuelen) + value_hex
+        body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(valuelen) + value_hex
     else:
         # Read commands (InverterReadRegisters, DataLoggerReadRegisters): register start and end are same
-        body = body + "{:04x}".format(int(register)) + "{:04x}".format(int(register))
+        body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(int(startregister))
     
     # Calculate body length
     bodylen = int(len(body) / 2 + 2)
@@ -539,7 +539,7 @@ def getRegisterValue(startTimeStamp, cmdInfo, register):
     return registerInfo(register, "No valid response received")
 
 # Unified function for queueing a register command and getting the response
-def queueAndGetRegisterValue(send_queuereg, name, readCommand, register=None, startregister=None, endregister=None, value=None):
+def queueAndGetRegisterValue(send_queuereg, name, readCommand, startregister=None, endregister=None, value=None):
     """
     Queue a register command (read or write) and wait for the response.
     Args:       send_queuereg: queue registry  
@@ -551,13 +551,15 @@ def queueAndGetRegisterValue(send_queuereg, name, readCommand, register=None, st
     """
       
     # normalize register parameter name
-    if startregister is None and register is not None:
-        startregister = register
-
+    if startregister is None:
+        startregister = 0 # default to register 0 if not provided
+    if endregister is None:
+        endregister = startregister
+    
     cmdInfo = commandInfo(name, readCommand)
     if cmdInfo.error:
         return registerInfo(startregister, cmdInfo.error)
-    startTimeStamp = queueRegisterCommand(send_queuereg, cmdInfo, register=startregister, value=value, startregister=startregister, endregister=endregister)
+    startTimeStamp = queueRegisterCommand(send_queuereg, cmdInfo, startregister=startregister, endregister=endregister, value=value)
     returnVal = getRegisterValue(startTimeStamp, cmdInfo, startregister)
     return returnVal
 
@@ -1176,7 +1178,7 @@ from flask.views import MethodView
 from flask_wtf import FlaskForm
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from wtforms import StringField, SubmitField, SelectField, PasswordField
-from wtforms.validators import DataRequired, Length
+from wtforms.validators import DataRequired, Length, Optional
 from werkzeug.security import generate_password_hash, check_password_hash
 import platform
 
@@ -1196,7 +1198,7 @@ class LoginForm(FlaskForm):
 class RegisterValueForm(FlaskForm):
     targetSelect = SelectField('Target (inverter/datalogger)', choices=[], validators=[DataRequired()])
     start = StringField('Start Register', validators=[DataRequired(), Length(min=1, max=10)])
-    end = StringField('End Register', validators=[DataRequired(), Length(min=1, max=10)])
+    end = StringField('End Register', validators=[Optional(), Length(min=1, max=10)])
     value = StringField('Register Value')  # This field can be used to display the fetched value   
     getValue = SubmitField('Get Register Value')
     setValue = SubmitField('Set Register Value')
@@ -1381,7 +1383,7 @@ class FlaskServer():
                 name = form.targetSelect.data
                 if form.getValue.data:
                     # Get the current value of the register
-                    regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=True, register=form.start.data, endregister=form.end.data)
+                    regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=True, startregister=form.start.data, endregister=form.end.data)
                     form.value.data = regInfo.value
                     logger.info(f"Register value retrieved for datalogger or inverter {name} register {form.start.data} : {regInfo.value}")
                 elif form.setValue.data:

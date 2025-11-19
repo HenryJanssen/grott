@@ -27,3 +27,5 @@ grott.log
 
 # Local config
 grott.ini
+tableExample.py
+xlsx_registers/
