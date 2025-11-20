@@ -193,14 +193,38 @@ def createtimecommand(self, protocol,deviceid,loggerid,sequenceno) :
         return(body)
 
 class registerInfo:
-    def __init__(self, regno, value):
+    def __init__(self, regno, value, retrievalDate=None):
         self.regno = regno
-        self.retrievalDate = datetime.now()
+        self.retrievalDate = retrievalDate if retrievalDate else datetime.now()
         self.value = value
 
+from registerTool import RegisterImporter
 class allRegistersInfo:
-    def __init__(self):
+    def __init__(self,name):
         self.registerInfos = {}
+        filename = name + ".json"
+        importer = RegisterImporter()
+        file_path = os.path.join('registers', filename)
+        try:
+            with open(file_path, 'r') as f:
+                pass
+        except FileNotFoundError:
+            logger.warning(f"Register file not found for {name} at {file_path}")
+            return  
+        imported_registers = importer.import_from_json(file_path)
+        if not imported_registers:
+            logger.warning(f"No registers imported for {name} from {file_path}")
+            return
+        
+        for reg in imported_registers:
+            regno = reg.get('register')
+            value = reg.get('value', '')
+            regInfo = registerInfo(regno, value) 
+            self.registerInfos[regno] = regInfo
+            for regField in reg:
+                if regField not in ('register', 'value'):
+                    setattr(self.registerInfos[regno], regField, reg[regField])
+
     
     def add_register(self, register_info):
         self.registerInfos[register_info.regno] = register_info
@@ -243,7 +267,7 @@ class inverterInfo(allRegistersInfo):
         self.inverterid = inverterid
         self.dataloggerid = dataloggerid
         self.inverterno = inverterno
-        super().__init__()
+        super().__init__(inverterid)
     
     
 class loggerInfo(allRegistersInfo):
@@ -254,7 +278,7 @@ class loggerInfo(allRegistersInfo):
         self.port = port
         self.inverters = {}
         self._inverterno_cache = {}  # Cache to speed up get_inverter_byinverterno lookups
-        super().__init__()
+        super().__init__(dataloggerid)
         
     def add_inverter(self, inverter):
         self.inverters[inverter.inverterid] = inverter
@@ -452,13 +476,13 @@ def queueRegisterCommand(send_queuereg, cmdInfo, startregister=None, endregister
         value_hex = "{:04x}".format(int(value))
         body = body + "{:04x}".format(int(startregister)) + value_hex
     elif cmd_str == CommandType.DataLoggerWriteRegisters.value:
-        # Datalogger register write (startregister, value_length, value)
+        # Datalogger register write (register, value_length, value)
         value_hex = value.encode('ISO-8859-1').hex()
         valuelen = int(len(value_hex) / 2)
         body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(valuelen) + value_hex
     else:
         # Read commands (InverterReadRegisters, DataLoggerReadRegisters): register start and end are same
-        body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(int(startregister))
+        body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(int(endregister if endregister is not None else startregister))
     
     # Calculate body length
     bodylen = int(len(body) / 2 + 2)
@@ -539,7 +563,7 @@ def getRegisterValue(startTimeStamp, cmdInfo, register):
     return registerInfo(register, "No valid response received")
 
 # Unified function for queueing a register command and getting the response
-def queueAndGetRegisterValue(send_queuereg, name, readCommand, startregister=None, endregister=None, value=None):
+def queueAndGetRegisterValue(send_queuereg, name, readCommand, startregister, endregister=None, value=None):
     """
     Queue a register command (read or write) and wait for the response.
     Args:       send_queuereg: queue registry  
@@ -550,12 +574,6 @@ def queueAndGetRegisterValue(send_queuereg, name, readCommand, startregister=Non
         endregister: end register (for multiregister command; None for single register commands)
     """
       
-    # normalize register parameter name
-    if startregister is None:
-        startregister = 0 # default to register 0 if not provided
-    if endregister is None:
-        endregister = startregister
-    
     cmdInfo = commandInfo(name, readCommand)
     if cmdInfo.error:
         return registerInfo(startregister, cmdInfo.error)
@@ -1178,7 +1196,7 @@ from flask.views import MethodView
 from flask_wtf import FlaskForm
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from wtforms import StringField, SubmitField, SelectField, PasswordField
-from wtforms.validators import DataRequired, Length, Optional
+from wtforms.validators import DataRequired, Length
 from werkzeug.security import generate_password_hash, check_password_hash
 import platform
 
@@ -1198,7 +1216,7 @@ class LoginForm(FlaskForm):
 class RegisterValueForm(FlaskForm):
     targetSelect = SelectField('Target (inverter/datalogger)', choices=[], validators=[DataRequired()])
     start = StringField('Start Register', validators=[DataRequired(), Length(min=1, max=10)])
-    end = StringField('End Register', validators=[Optional(), Length(min=1, max=10)])
+    end = StringField('End Register', validators=[DataRequired(), Length(min=1, max=10)])
     value = StringField('Register Value')  # This field can be used to display the fetched value   
     getValue = SubmitField('Get Register Value')
     setValue = SubmitField('Set Register Value')
@@ -1389,7 +1407,7 @@ class FlaskServer():
                 elif form.setValue.data:
                     # Set the value of the register
                     logger.info(f"Form submitted to set value with target: {name}, start: {form.start.data}, end: {form.end.data}, value: {form.value.data}")
-                    regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=False, register=form.start.data, value=form.value.data)
+                    regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=False, startregister=form.start.data, value=form.value.data)
             return render_template('register.html', mc=set_menu('register'), loggerreg=loggerreg, form=form)
 
     class RegisterOverview(MethodView):
@@ -1445,7 +1463,7 @@ class FlaskServer():
             target = request.args.get('target', default='', type=str)
             name = request.args.get('name', default='', type=str)
 
-            regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=True, register=register_start)
+            regInfo = queueAndGetRegisterValue(self.server.send_queuereg, name, readCommand=True, startregister=register_start)
             return jsonify({'value': regInfo.value})
             
     # --- Ported handlers from GrottHttpRequestHandler for backward compatibility ---
@@ -1544,7 +1562,7 @@ class FlaskServer():
                         name_for_cmd = datalogger.dataloggerid
                     else:
                         name_for_cmd = inverterid
-                    regInfo = queueAndGetRegisterValue(self.send_queuereg, name_for_cmd, readCommand=True, register=int(register))
+                    regInfo = queueAndGetRegisterValue(self.send_queuereg, name_for_cmd, readCommand=True, startregister=int(register))
                     
                     # Format value if needed
                     if sendcommand == CommandType.InverterReadRegisters:
@@ -1621,7 +1639,7 @@ class FlaskServer():
                         else:
                             name_for_cmd = inverterid
                         cmdInfo = commandInfo(name_for_cmd, False)
-                        queueRegisterCommand(self.send_queuereg, cmdInfo, register=int(register), value=value)
+                        queueRegisterCommand(self.send_queuereg, cmdInfo, startregister=int(register), value=value)
                         return make_response(b'OK', 200)
                     
                     elif command == 'multiregister':
