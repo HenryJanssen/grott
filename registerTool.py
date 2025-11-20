@@ -4,8 +4,13 @@ Supports datalogger, inverter time/date, and inverter configuration registers
 """
 
 import json
+import logging
 import os
 from pathlib import Path
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Try to import openpyxl for XLSX support
 try:
@@ -90,7 +95,7 @@ class RegisterExporter:
         data = list(registers)
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        print(f"✓ Exported {len(data)} registers to {filename}")
+        logger.info(f"✓ Exported {len(data)} registers to {filename}")
         return filename
     
     @staticmethod
@@ -132,7 +137,7 @@ class RegisterExporter:
             ws.column_dimensions[ws.cell(1, col_idx).column_letter].width = min(max_length, 50)
         
         wb.save(filename)
-        print(f"✓ Exported {len(registers)} registers to {filename}")
+        logger.info(f"✓ Exported {len(registers)} registers to {filename}")
         return filename
 
 
@@ -150,7 +155,7 @@ class RegisterImporter:
             if 'readOnStart' not in reg:
                 reg['readOnStart'] = False
         
-        print(f"✓ Imported {len(data)} registers from {filename}")
+        logger.info(f"✓ Imported {len(data)} registers from {filename}")
         return tuple(data)
     
     @staticmethod
@@ -200,7 +205,7 @@ class RegisterImporter:
             if 'readOnStart' not in reg:
                 reg['readOnStart'] = False
         
-        print(f"✓ Imported {len(data)} registers from {filename}")
+        logger.info(f"✓ Imported {len(data)} registers from {filename}")
         return tuple(data)
 
 
@@ -232,7 +237,7 @@ def export_all_registers(output_dir="registers_export", format_type="both"):
                 xlsx_file = os.path.join(output_dir, f"{table_name}.xlsx")
                 exporter.export_to_xlsx(table_data, xlsx_file)
             else:
-                print(f"⚠ Skipping XLSX export - openpyxl not installed")
+                logger.warning(f"⚠ Skipping XLSX export - openpyxl not installed")
 
 
 def import_all_registers(input_dir="registers", format_type="json"):
@@ -247,7 +252,7 @@ def import_all_registers(input_dir="registers", format_type="json"):
     tables = {}
     
     if not os.path.exists(input_dir):
-        print(f"⚠ Directory not found: {input_dir}")
+        logger.warning(f"⚠ Directory not found: {input_dir}")
         return tables
     
     # Walk through directory and find matching files
@@ -263,7 +268,7 @@ def import_all_registers(input_dir="registers", format_type="json"):
                 tables[table_name] = importer.import_from_xlsx(file_path)
     
     if not tables:
-        print(f"⚠ No {format_type.upper()} files found in {input_dir}")
+        logger.warning(f"⚠ No {format_type.upper()} files found in {input_dir}")
     
     return tables
 
@@ -279,19 +284,19 @@ def convert_registers(input_dir, input_format, output_dir, output_format):
         output_format: 'json' or 'xlsx'
     """
     if input_format == output_format:
-        print(f"⚠ Input and output formats are the same ({input_format})")
+        logger.warning(f"⚠ Input and output formats are the same ({input_format})")
         return
     
     # Import from source format
-    print(f"Reading {input_format.upper()} files from '{input_dir}'...")
+    logger.info(f"Reading {input_format.upper()} files from '{input_dir}'...")
     tables = import_all_registers(input_dir, input_format)
     
     if not tables:
-        print(f"✗ No registers imported from '{input_dir}'")
+        logger.error(f"✗ No registers imported from '{input_dir}'")
         return
     
     # Export to target format
-    print(f"Converting to {output_format.upper()} and saving to '{output_dir}'...")
+    logger.info(f"Converting to {output_format.upper()} and saving to '{output_dir}'...")
     Path(output_dir).mkdir(exist_ok=True)
     exporter = RegisterExporter()
     
@@ -304,26 +309,26 @@ def convert_registers(input_dir, input_format, output_dir, output_format):
                 xlsx_file = os.path.join(output_dir, f"{table_name}.xlsx")
                 exporter.export_to_xlsx(table_data, xlsx_file)
             else:
-                print(f"✗ openpyxl not installed - cannot export to XLSX")
+                logger.error(f"✗ openpyxl not installed - cannot export to XLSX")
                 return
     
-    print(f"\n✓ Successfully converted {len(tables)} register tables from {input_format.upper()} to {output_format.upper()}")
+    logger.info(f"✓ Successfully converted {len(tables)} register tables from {input_format.upper()} to {output_format.upper()}")
 
 
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("Register Tool - Export/Import/Convert utility")
-        print("\nUsage:")
-        print("  python registerTool.py export [json|xlsx|both] [output_dir]")
-        print("  python registerTool.py import [json|xlsx] [input_dir]")
-        print("  python registerTool.py convert <input_format> <output_format> [input_dir] [output_dir]")
-        print("\nExamples:")
-        print("  python registerTool.py export both ./exports")
-        print("  python registerTool.py import json ./exports")
-        print("  python registerTool.py convert json xlsx ./json_files ./xlsx_files")
-        print("  python registerTool.py convert xlsx json ./xlsx_files ./json_files")
+        logger.info("Register Tool - Export/Import/Convert utility")
+        logger.info("Usage:")
+        logger.info("  python registerTool.py export [json|xlsx|both] [output_dir]")
+        logger.info("  python registerTool.py import [json|xlsx] [input_dir]")
+        logger.info("  python registerTool.py convert <input_format> <output_format> [input_dir] [output_dir]")
+        logger.info("Examples:")
+        logger.info("  python registerTool.py export both ./exports")
+        logger.info("  python registerTool.py import json ./exports")
+        logger.info("  python registerTool.py convert json xlsx ./json_files ./xlsx_files")
+        logger.info("  python registerTool.py convert xlsx json ./xlsx_files ./json_files")
         sys.exit(1)
     
     command = sys.argv[1]
@@ -332,20 +337,20 @@ if __name__ == "__main__":
         fmt = sys.argv[2] if len(sys.argv) > 2 else "both"
         out_dir = sys.argv[3] if len(sys.argv) > 3 else "registers_export"
         export_all_registers(out_dir, fmt)
-        print(f"\n✓ All registers exported to '{out_dir}' in {fmt} format")
+        logger.info(f"✓ All registers exported to '{out_dir}' in {fmt} format")
     
     elif command == "import":
         fmt = sys.argv[2] if len(sys.argv) > 2 else "json"
         in_dir = sys.argv[3] if len(sys.argv) > 3 else "registers_export"
         tables = import_all_registers(in_dir, fmt)
-        print(f"\n✓ All registers imported from '{in_dir}' ({fmt} format)")
+        logger.info(f"✓ All registers imported from '{in_dir}' ({fmt} format)")
         for name, data in tables.items():
-            print(f"  - {name}: {len(data)} registers")
+            logger.info(f"  - {name}: {len(data)} registers")
     
     elif command == "convert":
         if len(sys.argv) < 4:
-            print("✗ Convert requires input and output formats")
-            print("Usage: python registerTool.py convert <input_format> <output_format> [input_dir] [output_dir]")
+            logger.error("✗ Convert requires input and output formats")
+            logger.error("Usage: python registerTool.py convert <input_format> <output_format> [input_dir] [output_dir]")
             sys.exit(1)
         
         input_fmt = sys.argv[2].lower()
@@ -354,13 +359,13 @@ if __name__ == "__main__":
         output_dir = sys.argv[5] if len(sys.argv) > 5 else f"registers_convert_{output_fmt}"
         
         if input_fmt not in ("json", "xlsx") or output_fmt not in ("json", "xlsx"):
-            print("✗ Format must be 'json' or 'xlsx'")
+            logger.error("✗ Format must be 'json' or 'xlsx'")
             sys.exit(1)
         
         convert_registers(input_dir, input_fmt, output_dir, output_fmt)
     
     else:
-        print(f"Unknown command: {command}")
-        print("\nAvailable commands: export, import, convert")
+        logger.error(f"Unknown command: {command}")
+        logger.error("Available commands: export, import, convert")
         sys.exit(1) 
 
