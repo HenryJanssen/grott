@@ -197,6 +197,11 @@ class registerInfo:
         self.regno = regno
         self.retrievalDate = retrievalDate if retrievalDate else datetime.now()
         self.value = value
+        # Metadata fields populated from register JSON (name, description, unit, readOnStart, etc.)
+        self.name = None
+        self.description = None
+        self.unit = None
+        self.readOnStart = None
 
 from registerTool import RegisterImporter
 class allRegistersInfo:
@@ -1261,6 +1266,8 @@ class FlaskServer():
         self.app.add_url_rule('/', view_func=self.Home.as_view('home', server=self))
         self.app.add_url_rule('/registerOverview', view_func=self.RegisterOverview.as_view('registerOverview', server=self))
         self.app.add_url_rule('/register', view_func=self.Register.as_view('register', server=self))
+        # API endpoint for register overview used by Grid.js server mode
+        self.app.add_url_rule('/api/registers', view_func=self._api_registers, methods=['GET'])
         # Backward compatibility: port GrottHttpServer endpoints to Flask
         # Provide same endpoints and behavior as the original GrottHttpRequestHandler
         self.app.add_url_rule('/info', view_func=self._info, methods=['GET'])
@@ -1487,6 +1494,118 @@ class FlaskServer():
 
     def _help(self):
         return make_response(b'No help available yet', 200)
+
+    def _api_registers(self):
+        """
+        Return paginated register overview JSON for Grid.js server mode with server-side sorting and filtering.
+        Response includes metadata fields: name, description, unit, readOnStart.
+        Response format: {"data": [ {idType, id, regno, name, description, unit, readOnStart, retrievalDateIso, retrievalDateFmt, value}, ... ], "total": <int> }
+        Query params supported: 
+          - page (1-based, default 1), perPage (default 25)
+          - search (global search across all columns, case-insensitive)
+          - sortBy (column id: idType, id, regno, retrievalDate, value, name)
+          - sortDir (asc or desc, default asc)
+          - filterIdType (filter by idType: Datalogger, Inverter, or empty for all)
+        """
+        try:
+            page = request.args.get('page', default=1, type=int)
+            per_page = request.args.get('perPage', default=25, type=int)
+            search = request.args.get('search', default='', type=str).lower()
+            sort_by = request.args.get('sortBy', default='id', type=str)
+            sort_dir = request.args.get('sortDir', default='asc', type=str).lower()
+            filter_id_type = request.args.get('filterIdType', default='', type=str)
+
+            items = []
+            # dataloggers
+            for dataloggerid, datalogger in loggerreg.loggers.items():
+                for regInfo in getattr(datalogger, 'registerInfos', {}).values():
+                    items.append({
+                        'idType': 'Datalogger',
+                        'id': dataloggerid,
+                        'regno': regInfo.regno,
+                        'name': getattr(regInfo, 'name', None),
+                        'description': getattr(regInfo, 'description', None),
+                        'unit': getattr(regInfo, 'unit', None),
+                        'readOnStart': getattr(regInfo, 'readOnStart', None),
+                        'retrievalDate': regInfo.retrievalDate,
+                        'value': regInfo.value
+                    })
+            # inverters
+            for inverterid, inverter in loggerreg.inverters.items():
+                for regInfo in getattr(inverter, 'registerInfos', {}).values():
+                    items.append({
+                        'idType': 'Inverter',
+                        'id': inverterid,
+                        'regno': regInfo.regno,
+                        'name': getattr(regInfo, 'name', None),
+                        'description': getattr(regInfo, 'description', None),
+                        'unit': getattr(regInfo, 'unit', None),
+                        'readOnStart': getattr(regInfo, 'readOnStart', None),
+                        'retrievalDate': regInfo.retrievalDate,
+                        'value': regInfo.value
+                    })
+
+            # apply idType filter
+            if filter_id_type:
+                items = [it for it in items if it['idType'] == filter_id_type]
+
+            # filter by global search
+            if search:
+                def matches(it):
+                    try:
+                        return (search in str(it['id']).lower() or
+                                search in str(it['regno']).lower() or
+                                search in str(it['value']).lower() or
+                                search in str(it['name'] or '').lower() or
+                                search in str(it['description'] or '').lower() or
+                                search in str(it['idType']).lower())
+                    except Exception:
+                        return False
+                items = [it for it in items if matches(it)]
+
+            total = len(items)
+
+            # server-side sorting
+            def sort_key(item):
+                val = item.get(sort_by)
+                if sort_by == 'regno':
+                    try:
+                        return (int(val), )
+                    except Exception:
+                        return (0, )
+                elif sort_by == 'retrievalDate':
+                    # sort by datetime object directly
+                    return (val if val else datetime.min, )
+                else:
+                    # string sort for idType, id, value, name, description
+                    return (str(val).lower() if val else '', )
+            
+            reverse = (sort_dir == 'desc')
+            items.sort(key=sort_key, reverse=reverse)
+
+            # pagination (page is 1-based)
+            start = max((page - 1) * per_page, 0)
+            end = start + per_page
+            page_items = items[start:end]
+
+            # format retrievalDate to both iso and human-readable strings
+            for it in page_items:
+                rd = it.get('retrievalDate')
+                try:
+                    it['retrievalDateIso'] = rd.isoformat() if hasattr(rd, 'isoformat') else str(rd)
+                    # human-readable format: "2025-11-20 14:30:45"
+                    if hasattr(rd, 'strftime'):
+                        it['retrievalDateFmt'] = rd.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        it['retrievalDateFmt'] = str(rd)
+                except Exception:
+                    it['retrievalDateIso'] = str(rd)
+                    it['retrievalDateFmt'] = str(rd)
+
+            return jsonify({'data': page_items, 'total': total})
+        except Exception as e:
+            logger.exception('Exception in /api/registers: %s', e)
+            return make_response(b'Internal Server Error', 500)
 
     def _datainv(self):
         # Combined handler for /datalogger and /inverter. Determine which based on path.
