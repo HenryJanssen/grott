@@ -203,6 +203,9 @@ class registerInfo:
         self.unit = None
         self.readOnStart = None
 
+    def __str__(self):
+        return f"Register {self.regno}: Value={self.value}, RetrievedAt={self.retrievalDate}, Name={self.name}, Description={self.description}, Unit={self.unit}, ReadOnStart={self.readOnStart}"
+
 from registerTool import RegisterImporter
 class allRegistersInfo:
     def __init__(self,name):
@@ -266,6 +269,26 @@ class allRegistersInfo:
                 return reg_info
         return None
     
+    def idType(self):
+        return 'Undefined'
+    
+    def id(self):
+        return 'Undefined'
+    
+    def createRegOverview(self, items):
+        for regInfo in self.registerInfos.values():
+            items.append({
+                        'idType': self.idType(),
+                        'id': self.id(),
+                        'regno': regInfo.regno,
+                        'name': getattr(regInfo, 'name', None),
+                        'description': getattr(regInfo, 'description', None),
+                        'unit': getattr(regInfo, 'unit', None),
+                        'readOnStart': getattr(regInfo, 'readOnStart', None),
+                        'retrievalDate': regInfo.retrievalDate,
+                        'value': regInfo.value
+                })
+    
 
 class inverterInfo(allRegistersInfo):
     def __init__(self, inverterid, dataloggerid, inverterno):
@@ -274,6 +297,11 @@ class inverterInfo(allRegistersInfo):
         self.inverterno = inverterno
         super().__init__(inverterid)
     
+    def idType(self):
+        return 'Inverter'
+    
+    def id(self):
+        return self.inverterid
     
 class loggerInfo(allRegistersInfo):
     def __init__(self, dataloggerid, protocol, ip, port):
@@ -284,6 +312,12 @@ class loggerInfo(allRegistersInfo):
         self.inverters = {}
         self._inverterno_cache = {}  # Cache to speed up get_inverter_byinverterno lookups
         super().__init__(dataloggerid)
+    
+    def idType(self):
+        return 'Datalogger' 
+    
+    def id(self):
+        return self.dataloggerid
         
     def add_inverter(self, inverter):
         self.inverters[inverter.inverterid] = inverter
@@ -1518,32 +1552,12 @@ class FlaskServer():
             items = []
             # dataloggers
             for dataloggerid, datalogger in loggerreg.loggers.items():
-                for regInfo in getattr(datalogger, 'registerInfos', {}).values():
-                    items.append({
-                        'idType': 'Datalogger',
-                        'id': dataloggerid,
-                        'regno': regInfo.regno,
-                        'name': getattr(regInfo, 'name', None),
-                        'description': getattr(regInfo, 'description', None),
-                        'unit': getattr(regInfo, 'unit', None),
-                        'readOnStart': getattr(regInfo, 'readOnStart', None),
-                        'retrievalDate': regInfo.retrievalDate,
-                        'value': regInfo.value
-                    })
+                datalogger.createRegOverview(items)
+                
             # inverters
             for inverterid, inverter in loggerreg.inverters.items():
-                for regInfo in getattr(inverter, 'registerInfos', {}).values():
-                    items.append({
-                        'idType': 'Inverter',
-                        'id': inverterid,
-                        'regno': regInfo.regno,
-                        'name': getattr(regInfo, 'name', None),
-                        'description': getattr(regInfo, 'description', None),
-                        'unit': getattr(regInfo, 'unit', None),
-                        'readOnStart': getattr(regInfo, 'readOnStart', None),
-                        'retrievalDate': regInfo.retrievalDate,
-                        'value': regInfo.value
-                    })
+                inverter.createRegOverview(items)
+            # Now items is a list of dicts with all register overview entries
 
             # apply idType filter
             if filter_id_type:
@@ -1586,7 +1600,10 @@ class FlaskServer():
             # pagination (page is 1-based)
             start = max((page - 1) * per_page, 0)
             end = start + per_page
+            if end > total:
+                end = total
             page_items = items[start:end]
+            logger.info(f"/api/registers - page {page} per Page {per_page} total items after filtering: {total}, returning items {start} to {end}")
 
             # format retrievalDate to both iso and human-readable strings
             for it in page_items:
