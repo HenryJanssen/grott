@@ -1529,7 +1529,7 @@ class FlaskServer():
     def _help(self):
         return make_response(b'No help available yet', 200)
 
-    def _api_registers(self):
+    def _api_registers_serverside(self):
         """
         Return paginated register overview JSON for Grid.js server mode with server-side sorting and filtering.
         Response includes metadata fields: name, description, unit, readOnStart.
@@ -1623,7 +1623,47 @@ class FlaskServer():
         except Exception as e:
             logger.error('Exception in /api/registers: %s', e)
             return make_response(b'Internal Server Error', 500)
-
+    
+    def _api_registers(self):
+        """
+        Return paginated register overview JSON for Grid.js server mode with server-side sorting and filtering.
+        Response includes metadata fields: name, description, unit, readOnStart.
+        Response format: {"data": [ {idType, id, regno, name, description, unit, readOnStart, retrievalDateIso, retrievalDateFmt, value}, ... ], "total": <int> }
+        Query params supported: 
+          - page (1-based, default 1), perPage (default 25)
+          - search (global search across all columns, case-insensitive)
+          - sortBy (column id: idType, id, regno, retrievalDate, value, name)
+          - sortDir (asc or desc, default asc)
+          - filterIdType (filter by idType: Datalogger, Inverter, or empty for all)
+        """
+        try:
+            items = []
+            # dataloggers
+            for dataloggerid, datalogger in loggerreg.loggers.items():
+                datalogger.createRegOverview(items)
+                
+            # inverters
+            for inverterid, inverter in loggerreg.inverters.items():
+                inverter.createRegOverview(items)
+            # Now items is a list of dicts with all register overview entries
+            # format retrievalDate to both iso and human-readable strings
+            for it in items:
+                rd = it.get('retrievalDate')
+                try:
+                    it['retrievalDateIso'] = rd.isoformat() if hasattr(rd, 'isoformat') else str(rd)
+                    # human-readable format: "2025-11-20 14:30:45"
+                    if hasattr(rd, 'strftime'):
+                        it['retrievalDateFmt'] = rd.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        it['retrievalDateFmt'] = str(rd)
+                except Exception:
+                    it['retrievalDateIso'] = str(rd)
+                    it['retrievalDateFmt'] = str(rd)
+            return jsonify({'data': items})
+        except Exception as e:
+            logger.error('Exception in /api/registers: %s', e)
+            return make_response(b'Internal Server Error', 500)
+        
     def _datainv(self):
         # Combined handler for /datalogger and /inverter. Determine which based on path.
         try:

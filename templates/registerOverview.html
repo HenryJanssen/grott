@@ -41,19 +41,6 @@
     (function(){
         const gridContainer = document.getElementById('grid-wrapper');
         const pageSize = 25;
-        let currentPageSize = pageSize;
-
-        // helper to build server URL with params
-        function buildUrl(page, perPage, search, sortBy, sortDir, filterIdType) {
-            const params = new URLSearchParams();
-            params.set('page', page);
-            params.set('perPage', perPage);
-            if (search) params.set('search', search);
-            if (sortBy) params.set('sortBy', sortBy);
-            if (sortDir) params.set('sortDir', sortDir);
-            if (filterIdType) params.set('filterIdType', filterIdType);
-            return '/api/registers?' + params.toString();
-        }
 
         // format timestamp in table cell
         function formatDate(ts) {
@@ -74,14 +61,13 @@
                 { id: 'retrievalDateFmt', name: 'Retrieval Date' }
             ],
             server: {
-                url: buildUrl(1, currentPageSize, '', 'id', 'asc', ''),
-                then: data => data.data.map(r => [r.idType, r.id, r.regno, r.name || '-', r.description || '-', r.unit || '-', r.value, r.retrievalDateFmt]),
-                total: data => data.total
+                url: '/api/registers',
+                then: results => results.data,
             },
-            pagination: {
-                enabled: true,
-                limit: currentPageSize
+            search: {
+                selector: (cell, rowIndex, cellIndex) => [0, 1, 4].includes(cellIndex) ? cell : null,
             },
+            pagination: true,
             sort: true,
             resizable: true,
             style: {
@@ -91,61 +77,7 @@
             }
         }).render(gridContainer);
 
-        // handle global search
-        const searchInput = document.getElementById('globalSearch');
-        let searchTimeout = null;
-        searchInput.addEventListener('input', function(e){
-            clearTimeout(searchTimeout);
-            const q = e.target.value.trim();
-            const filter = document.getElementById('filterIdType').value;
-            searchTimeout = setTimeout(()=>{
-                grid.updateConfig({
-                    server: {
-                        url: buildUrl(1, currentPageSize, q, 'id', 'asc', filter),
-                        then: data => data.data.map(r => [r.idType, r.id, r.regno, r.name || '-', r.description || '-', r.unit || '-', r.value, r.retrievalDateFmt]),
-                        total: data => data.total
-                    }
-                }).forceRender();
-            }, 300);
         });
-
-        // handle page size change
-        const pageSizeSelect = document.getElementById('pageSize');
-        pageSizeSelect.addEventListener('change', function(e){
-            currentPageSize = parseInt(e.target.value);
-            const q = searchInput.value.trim();
-            const filter = document.getElementById('filterIdType').value;
-            grid.updateConfig({
-                pagination: {
-                    enabled: true,
-                    limit: currentPageSize
-                },
-                server: {
-                    url: buildUrl(1, currentPageSize, q, 'id', 'asc', filter),
-                    then: data => data.data.map(r => [r.idType, r.id, r.regno, r.name || '-', r.description || '-', r.unit || '-', r.value, r.retrievalDateFmt]),
-                    total: data => data.total
-                }
-            }).forceRender();
-        });
-
-        // handle column filter (idType)
-        const filterSelect = document.getElementById('filterIdType');
-        filterSelect.addEventListener('change', function(e){
-            const filter = e.target.value;
-            const q = searchInput.value.trim();
-            grid.updateConfig({
-                server: {
-                    url: buildUrl(1, currentPageSize, q, 'id', 'asc', filter),
-                    then: data => data.data.map(r => [r.idType, r.id, r.regno, r.name || '-', r.description || '-', r.unit || '-', r.value, r.retrievalDateFmt]),
-                    total: data => data.total
-                }
-            }).forceRender();
-        });
-
-        // listen for grid sort events to update server request
-        // Grid.js doesn't emit sort events directly in server mode, but we can override the update function
-        // For now, basic sorting is handled by Grid.js client-side via sort icons
-    })();
 </script>
 
 {% endblock %}
