@@ -30,63 +30,43 @@
         </div>
     </div>
 
-    <div id="grid-wrapper"></div>
+    <div id="registers-table"></div>
 </div>
 
 <!-- Grid.js CSS/JS -->
 <link href="https://unpkg.com/gridjs/dist/theme/mermaid.min.css" rel="stylesheet" />
 <script src="https://unpkg.com/gridjs/dist/gridjs.umd.js"></script>
 
-<script>
-    (function(){
-        const gridContainer = document.getElementById('grid-wrapper');
-        const pageSize = 25;
+<script type="module">
+  import { Grid } from "gridjs";
 
-        // format timestamp in table cell
-        function formatDate(ts) {
-            if (!ts) return '';
-            return ts; // API now returns retrievalDateFmt, already formatted
-        }
-
-        // instantiate grid with server mode
-        let grid = new gridjs.Grid({
-            columns: [
-                { id: 'idType', name: 'ID Type' },
-                { id: 'id', name: 'ID' },
-                { id: 'regno', name: 'Register' },
-                { id: 'name', name: 'Name' },
-                { id: 'description', name: 'Description' },
-                { id: 'unit', name: 'Unit' },
-                { id: 'value', name: 'Value' },
-                { id: 'retrievalDateFmt', name: 'Retrieval Date' }
-            ],
-            server: {
-                url: '/api/registers',
-                then: data => data.data.map(item => [
-                    item.idType,
-                    item.id,
-                    item.regno,
-                    item.name || "Register not specified",
-                    item.description || "Register not specified",
-                    item.unit || "Register not specified",
-                    item.value,
-                    item.retrievalDateFmt
-                ]),
-            },
-            search: true,
-            pagination:  {
-                enabled: true,
-                limit: 25
-            },
-            sort: true,
-            style: {
-                table: {
-                    'white-space': 'nowrap'
-                }
-            }
-        }).render(gridContainer);
-
-        });
+  new Grid({
+    columns: [
+      { id: "regno", name: "Register No" },
+      { id: "name", name: "Name" },
+      { id: "value", name: "Value" },
+      { id: "unit", name: "Unit" },
+      { id: "description", name: "Description" }
+    ],
+    server: {
+      url: "/api/registers",
+      then: data => {
+        // Your API returns { data: [ ... ] }
+        return data.data.map(reg => [
+          reg.regno,
+          reg.name || "(no name)",
+          reg.value || "(empty)",
+          reg.unit || "",
+          reg.description || ""
+        ]);
+      }
+    },
+    search: true,
+    pagination: {
+      enabled: true,
+      limit: 25
+    },
+    sort: true
+  }).render(document.getElementById("registers-table"));
 </script>
-
 {% endblock %}
