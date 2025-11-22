@@ -1659,6 +1659,7 @@ class FlaskServer():
                 except Exception:
                     it['retrievalDateIso'] = str(rd)
                     it['retrievalDateFmt'] = str(rd)
+            logger.info(f"/api/registers - total items: {len(items)}")
             return jsonify({'data': items})
         except Exception as e:
             logger.error('Exception in /api/registers: %s', e)
