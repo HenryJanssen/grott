@@ -1621,7 +1621,7 @@ class FlaskServer():
 
             return jsonify({'data': page_items, 'total': total})
         except Exception as e:
-            logger.exception('Exception in /api/registers: %s', e)
+            logger.error('Exception in /api/registers: %s', e)
             return make_response(b'Internal Server Error', 500)
 
     def _datainv(self):
