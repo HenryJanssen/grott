@@ -1602,8 +1602,8 @@ class FlaskServer():
             end = start + per_page
             if end > total:
                 end = total
-            page_items = items[start:end]
             logger.info(f"/api/registers - page {page} per Page {per_page} total items after filtering: {total}, returning items {start} to {end}")
+            page_items = items[start:end]
 
             # format retrievalDate to both iso and human-readable strings
             for it in page_items:
