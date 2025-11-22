@@ -62,20 +62,23 @@
             ],
             server: {
                 url: '/api/registers',
-                then: data => data.items.map(item => [
+                then: data => data.data.map(item => [
                     item.idType,
                     item.id,
                     item.regno,
-                    item.name,
-                    item.description,
-                    item.unit,
+                    item.name || "Register not specified",
+                    item.description || "Register not specified",
+                    item.unit || "Register not specified",
                     item.value,
                     item.retrievalDateFmt
                 ]),
             },
-            pagination: true,
+            search: true,
+            pagination:  {
+                enabled: true,
+                limit: 25
+            },
             sort: true,
-            resizable: true,
             style: {
                 table: {
                     'white-space': 'nowrap'
