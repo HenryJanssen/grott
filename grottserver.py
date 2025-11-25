@@ -209,7 +209,7 @@ class registerInfo:
 from registerTool import RegisterImporter
 class allRegistersInfo:
     def __init__(self,name):
-        self.registerInfos = {}
+        self.registerInfos = self.copyDefaults()
         filename = name + ".json"
         importer = RegisterImporter()
         file_path = os.path.join('registers', filename)
@@ -217,7 +217,7 @@ class allRegistersInfo:
             with open(file_path, 'r') as f:
                 pass
         except FileNotFoundError:
-            logger.warning(f"Register file not found for {name} at {file_path}")
+            logger.info(f"Register file not found for {name} at {file_path}")
             return  
         imported_registers = importer.import_from_json(file_path)
         if not imported_registers:
@@ -233,6 +233,8 @@ class allRegistersInfo:
                 if regField not in ('register', 'value'):
                     setattr(self.registerInfos[regno], regField, reg[regField])
 
+    def copyDefaults(self):
+        return {}
     
     def add_register(self, register_info):
         self.registerInfos[register_info.regno] = register_info
@@ -302,7 +304,10 @@ class inverterInfo(allRegistersInfo):
     
     def id(self):
         return self.inverterid
-    
+
+    def copyDefaults(self):
+        return loggerreg.defaultInverterRegisters.registerInfos.copy()
+
 class loggerInfo(allRegistersInfo):
     def __init__(self, dataloggerid, protocol, ip, port):
         self.dataloggerid = dataloggerid
@@ -318,7 +323,10 @@ class loggerInfo(allRegistersInfo):
     
     def id(self):
         return self.dataloggerid
-        
+    
+    def copyDefaults(self):
+        return loggerreg.defaultDataloggerRegisters.registerInfos.copy()
+    
     def add_inverter(self, inverter):
         self.inverters[inverter.inverterid] = inverter
         # Update cache for O(1) lookup by inverterno
@@ -367,6 +375,8 @@ class loggerRegistry:
     def __init__(self):
         self.loggers = {}
         self.inverters = {}
+        self.defaultDataloggerRegisters = allRegistersInfo("defaultDatalogger")
+        self.defaultInverterRegisters = allRegistersInfo("defaultInverter")
 
     def add_logger(self, dataloggerid, protocol, ip, port):
         if dataloggerid not in self.loggers:
@@ -1529,101 +1539,6 @@ class FlaskServer():
     def _help(self):
         return make_response(b'No help available yet', 200)
 
-    def _api_registers_serverside(self):
-        """
-        Return paginated register overview JSON for Grid.js server mode with server-side sorting and filtering.
-        Response includes metadata fields: name, description, unit, readOnStart.
-        Response format: {"data": [ {idType, id, regno, name, description, unit, readOnStart, retrievalDateIso, retrievalDateFmt, value}, ... ], "total": <int> }
-        Query params supported: 
-          - page (1-based, default 1), perPage (default 25)
-          - search (global search across all columns, case-insensitive)
-          - sortBy (column id: idType, id, regno, retrievalDate, value, name)
-          - sortDir (asc or desc, default asc)
-          - filterIdType (filter by idType: Datalogger, Inverter, or empty for all)
-        """
-        try:
-            page = request.args.get('page', default=1, type=int)
-            per_page = request.args.get('perPage', default=25, type=int)
-            search = request.args.get('search', default='', type=str).lower()
-            sort_by = request.args.get('sortBy', default='id', type=str)
-            sort_dir = request.args.get('sortDir', default='asc', type=str).lower()
-            filter_id_type = request.args.get('filterIdType', default='', type=str)
-
-            items = []
-            # dataloggers
-            for dataloggerid, datalogger in loggerreg.loggers.items():
-                datalogger.createRegOverview(items)
-                
-            # inverters
-            for inverterid, inverter in loggerreg.inverters.items():
-                inverter.createRegOverview(items)
-            # Now items is a list of dicts with all register overview entries
-
-            # apply idType filter
-            if filter_id_type:
-                items = [it for it in items if it['idType'] == filter_id_type]
-
-            # filter by global search
-            if search:
-                def matches(it):
-                    try:
-                        return (search in str(it['id']).lower() or
-                                search in str(it['regno']).lower() or
-                                search in str(it['value']).lower() or
-                                search in str(it['name'] or '').lower() or
-                                search in str(it['description'] or '').lower() or
-                                search in str(it['idType']).lower())
-                    except Exception:
-                        return False
-                items = [it for it in items if matches(it)]
-
-            total = len(items)
-
-            # server-side sorting
-            def sort_key(item):
-                val = item.get(sort_by)
-                if sort_by == 'regno':
-                    try:
-                        return (int(val), )
-                    except Exception:
-                        return (0, )
-                elif sort_by == 'retrievalDate':
-                    # sort by datetime object directly
-                    return (val if val else datetime.min, )
-                else:
-                    # string sort for idType, id, value, name, description
-                    return (str(val).lower() if val else '', )
-            
-            reverse = (sort_dir == 'desc')
-            items.sort(key=sort_key, reverse=reverse)
-
-            # pagination (page is 1-based)
-            start = max((page - 1) * per_page, 0)
-            end = start + per_page
-            if end > total:
-                end = total
-            logger.info(f"/api/registers - page {page} per Page {per_page} total items after filtering: {total}, returning items {start} to {end}")
-            page_items = items[start:end]
-
-            # format retrievalDate to both iso and human-readable strings
-            for it in page_items:
-                rd = it.get('retrievalDate')
-                try:
-                    it['retrievalDateIso'] = rd.isoformat() if hasattr(rd, 'isoformat') else str(rd)
-                    # human-readable format: "2025-11-20 14:30:45"
-                    if hasattr(rd, 'strftime'):
-                        it['retrievalDateFmt'] = rd.strftime('%Y-%m-%d %H:%M:%S')
-                    else:
-                        it['retrievalDateFmt'] = str(rd)
-                except Exception:
-                    it['retrievalDateIso'] = str(rd)
-                    it['retrievalDateFmt'] = str(rd)
-
-            return jsonify({'data': page_items, 'total': total})
-        except Exception as e:
-            logger.error('Exception in /api/registers: %s', e)
-            return make_response(b'Internal Server Error', 500)
-    
     def _api_registers(self):
         """
         Return paginated register overview JSON for Grid.js server mode with server-side sorting and filtering.

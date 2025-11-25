@@ -1,0 +1,4 @@
+[
+  { "description": "Set Inverter On/Off", "name": "Interval", "readOnStart": true, "register": 0, "unit": "int"  },
+  { "description": "Percentage of Max Power", "name": "maxpowerpercent", "readOnStart": true, "register": 3, "unit": "int"  }
+]

@@ -8,20 +8,57 @@
 {% block contents %}
     <link href="https://unpkg.com/gridjs/dist/theme/mermaid.min.css" rel="stylesheet" />
     <script src="https://unpkg.com/gridjs/dist/gridjs.umd.js"></script>
+    <style>
+        .header-bar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+        .header-bar h1 { margin: 0; }
+        .page-size { display: flex; align-items: center; gap: 8px; }
+        .page-size label { font-weight: 600; }
+        .column-toggles { margin: 12px 0; }
+        .column-toggles label { margin-right: 12px; }
+    </style>
 
     <body>
-      <h1>Register Overview</h1>
+     <div class="header-bar">
+        <h1>Register Overview (Live Data)</h1>
+        <div class="page-size">
+          <label for="pageSize">Items per page:</label>
+          <select id="pageSize">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+      </div>
+      <div class="column-toggles">
+        <strong>Toggle columns:</strong>
+        <label><input type="checkbox" data-col="regno" checked> Datalogger/Inverter</label>
+        <label><input type="checkbox" data-col="regno" checked> Datalogger/Inverter ID</label>
+        <label><input type="checkbox" data-col="regno" checked> Register No</label>
+        <label><input type="checkbox" data-col="name" checked> Name</label>
+        <label><input type="checkbox" data-col="value" checked> Value</label>
+        <label><input type="checkbox" data-col="unit" checked> Unit</label>
+        <label><input type="checkbox" data-col="description" checked> Description</label>
+        <label><input type="checkbox" data-col="retrievalDate" checked> Description</label>        
+      </div>
+ 
       <div id="registers-table"></div>
       <script>
         new gridjs.Grid({
           columns: [
-            { id: "idType", name: "Datalogger/Inverter" },
-            { id: "id", name: "Datalogger/Inverter ID" },
-            { id: "regno", name: "Register No" },
-            { id: "name", name: "Name" },
-            { id: "value", name: "Value" },
-            { id: "unit", name: "Unit" },
-            { id: "description", name: "Description" }
+            { id: "idType", name: "Datalogger/Inverter", resizable: true  },
+            { id: "id", name: "Datalogger/Inverter ID", resizable: true  },
+            { id: "regno", name: "Register No", resizable: true  },
+            { id: "name", name: "Name" , resizable: true },
+            { id: "value", name: "Value", resizable: true  },
+            { id: "unit", name: "Unit" , resizable: true },
+            { id: "description", name: "Description", resizable: true  }
+            { id: "retrievalDate", name: "Retrieval Date", resizable: true  }
           ],
           server: {
             url: "/api/registers",
@@ -32,13 +69,31 @@
                 reg.name || "(no name)",
                 reg.value || "(empty)",
                 reg.unit || "",
-                reg.description || ""
+                reg.description || "",
+                reg.retrievalDate || ""
             ])
           },
           search: true,
-          pagination: { enabled: true, limit: 25 },
+          pagination: { enabled: true, limit: 20 },
           sort: true
         }).render(document.getElementById("registers-table"));
+
+        const pageSizeSelect = document.getElementById('pageSize');
+        pageSizeSelect.addEventListener('change', () => {
+          const newLimit = parseInt(pageSizeSelect.value, 10);
+          grid.updateConfig({
+            pagination: { enabled: true, limit: newLimit }
+          }).forceRender();
+        });
+        // Column toggle checkboxes
+        document.querySelectorAll('.column-toggles input[type=checkbox]').forEach(cb => {
+          cb.addEventListener('change', () => {
+            const colId = cb.dataset.col;
+            columns = columns.map(c => c.id === colId ? { ...c, hidden: !cb.checked } : c);
+            grid.updateConfig({ columns }).forceRender();
+          });
+        });
+
       </script>
     </body>
 {% endblock %}
