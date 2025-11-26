@@ -22,7 +22,7 @@
         .column-toggles label { margin-right: 12px; }
     </style>
 
-    <body>
+    <div class="container">
      <div class="header-bar">
         <h1>Register Overview (Live Data)</h1>
         <div class="page-size">
@@ -49,8 +49,8 @@
  
       <div id="registers-table"></div>
       <script>
-        new gridjs.Grid({
-          columns: [
+        // keep columns in a variable so toggles can change them
+        let columns = [
             { id: "idType", name: "Datalogger/Inverter", resizable: true  },
             { id: "id", name: "Datalogger/Inverter ID", resizable: true  },
             { id: "regno", name: "Register No", resizable: true  },
@@ -59,7 +59,10 @@
             { id: "unit", name: "Unit" , resizable: true },
             { id: "description", name: "Description", resizable: true  },
             { id: "retrievalDate", name: "Retrieval Date", resizable: true  }
-          ],
+        ];
+
+        const grid = new gridjs.Grid({
+          columns: columns,
           server: {
             url: "/api/registers",
             then: data => data.data.map(reg => [
@@ -76,7 +79,9 @@
           search: true,
           pagination: { enabled: true, limit: 20 },
           sort: true
-        }).render(document.getElementById("registers-table"));
+        });
+
+        grid.render(document.getElementById("registers-table"));
 
         const pageSizeSelect = document.getElementById('pageSize');
         pageSizeSelect.addEventListener('change', () => {
@@ -85,15 +90,16 @@
             pagination: { enabled: true, limit: newLimit }
           }).forceRender();
         });
+
         // Column toggle checkboxes
         document.querySelectorAll('.column-toggles input[type=checkbox]').forEach(cb => {
           cb.addEventListener('change', () => {
             const colId = cb.dataset.col;
-            columns = columns.map(c => c.id === colId ? { ...c, hidden: !cb.checked } : c);
+            columns = columns.map(c => c.id === colId ? Object.assign({}, c, { hidden: !cb.checked }) : c);
             grid.updateConfig({ columns }).forceRender();
           });
         });
 
       </script>
-    </body>
+    </div>
 {% endblock %}
