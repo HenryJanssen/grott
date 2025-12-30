@@ -11,7 +11,7 @@ Type=simple
 User=henry
 
 WorkingDirectory=/home/henry/grott/
-ExecStart=-/home/henry/venvs/grott/bin/python -u /home/henry/grott/grottserver.py
+ExecStart=-/home/henry/grott/.venv/bin/python -u /home/henry/grott/grottserver.py
 #StandardInput=socket
 StandardOutput=journal
 
